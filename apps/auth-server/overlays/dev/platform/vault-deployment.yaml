@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.18
+          args:
+            - server
+            - -dev
+            - -dev-root-token-id=$(VAULT_DEV_ROOT_TOKEN_ID)
+            - -dev-listen-address=0.0.0.0:8200
+          ports:
+            - containerPort: 8200
+              name: http
+          env:
+            - name: VAULT_ADDR
+              value: http://127.0.0.1:8200
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: VAULT_DEV_ROOT_TOKEN_ID
+            - name: VAULT_DEV_ROOT_TOKEN_ID
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: VAULT_DEV_ROOT_TOKEN_ID
+            - name: VAULT_TRANSIT_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: VAULT_TRANSIT_KEY_NAME
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - /vault-init/01-init-transit.sh
+          volumeMounts:
+            - name: vault-init-script
+              mountPath: /vault-init/01-init-transit.sh
+              subPath: 01-init-transit.sh
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - vault status -address=http://127.0.0.1:8200 >/dev/null
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - vault status -address=http://127.0.0.1:8200 >/dev/null
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: vault-init-script
+          configMap:
+            name: vault-init-script
+            defaultMode: 0555

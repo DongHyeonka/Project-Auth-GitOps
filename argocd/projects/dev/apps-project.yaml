@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: apps-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: Dev application workloads managed by Argo CD
+  sourceRepos:
+    - https://github.com/DongHyeonka/Project-Auth-GitOps
+  destinations:
+    - namespace: auth-dev
+      server: https://kubernetes.default.svc
+    - namespace: api-dev
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Secret
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: "bitnami.com"
+      kind: SealedSecret
+    - group: "apps"
+      kind: Deployment
+    - group: "apps"
+      kind: StatefulSet
+    - group: "apps"
+      kind: ReplicaSet
+    - group: "autoscaling"
+      kind: HorizontalPodAutoscaler
+    - group: "batch"
+      kind: Job
+    - group: "networking.k8s.io"
+      kind: Ingress
+    - group: "policy"
+      kind: PodDisruptionBudget
+  orphanedResources:
+    warn: true
