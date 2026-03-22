@@ -6,3 +6,8 @@ namespace: api-prod
 resources:
   - ../../base
   - namespace.yaml
+
+images:
+  - name: ghcr.io/donghyeonka/project-api-server
+    newName: ghcr.io/donghyeonka/project-api-server
+    newTag: fd097c9

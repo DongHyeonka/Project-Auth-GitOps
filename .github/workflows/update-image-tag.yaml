@@ -1,0 +1,140 @@
+name: Update GitOps Image Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Service to update
+        required: true
+        type: choice
+        options:
+          - auth-server
+          - api-server
+      target_env:
+        description: Overlay environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+      image_tag:
+        description: New container image tag
+        required: true
+        type: string
+  repository_dispatch:
+    types:
+      - gitops-image-update
+
+concurrency:
+  group: gitops-image-tag-update-${{ github.event.repository.default_branch }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  update-image-tag:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Resolve inputs
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            service="${{ inputs.service }}"
+            target_env="${{ inputs.target_env }}"
+            image_tag="${{ inputs.image_tag }}"
+          else
+            service="${{ github.event.client_payload.service }}"
+            target_env="${{ github.event.client_payload.target_env || github.event.client_payload.environment }}"
+            image_tag="${{ github.event.client_payload.image_tag }}"
+          fi
+
+          if [[ -z "$service" || -z "$target_env" || -z "$image_tag" ]]; then
+            echo "Missing service/target_env/image_tag input" >&2
+            exit 1
+          fi
+
+          case "$service" in
+            auth-server)
+              image_name="ghcr.io/donghyeonka/project-auth-server"
+              ;;
+            api-server)
+              image_name="ghcr.io/donghyeonka/project-api-server"
+              ;;
+            *)
+              echo "Unsupported service: $service" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$target_env" in
+            dev|prod)
+              ;;
+            *)
+              echo "Unsupported environment: $target_env" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "$image_tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "Unsupported image tag format: $image_tag" >&2
+            exit 1
+          fi
+
+          kustomization="apps/${service}/overlays/${target_env}/kustomization.yaml"
+
+          {
+            echo "SERVICE=$service"
+            echo "TARGET_ENV=$target_env"
+            echo "IMAGE_TAG=$image_tag"
+            echo "IMAGE_NAME=$image_name"
+            echo "KUSTOMIZATION=$kustomization"
+          } >> "$GITHUB_ENV"
+
+      - name: Update kustomization image tag
+        run: |
+          if [[ ! -f "$KUSTOMIZATION" ]]; then
+            echo "Kustomization not found: $KUSTOMIZATION" >&2
+            exit 1
+          fi
+
+          if ! grep -Fq "name: $IMAGE_NAME" "$KUSTOMIZATION"; then
+            echo "Expected image entry not found: $IMAGE_NAME" >&2
+            exit 1
+          fi
+
+          if [[ "$(grep -c '^    newTag: ' "$KUSTOMIZATION")" -ne 1 ]]; then
+            echo "Expected exactly one newTag entry in $KUSTOMIZATION" >&2
+            exit 1
+          fi
+
+          sed -i "s#^    newTag: .*#    newTag: $IMAGE_TAG#" "$KUSTOMIZATION"
+
+      - name: Validate rendered overlay
+        run: |
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo "kubectl is required to validate the overlay" >&2
+            exit 1
+          fi
+
+          kubectl kustomize "$(dirname "$KUSTOMIZATION")" >/dev/null
+
+      - name: Commit and push
+        run: |
+          if git diff --quiet -- "$KUSTOMIZATION"; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git diff -- "$KUSTOMIZATION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$KUSTOMIZATION"
+          git commit -m "chore(gitops): update ${SERVICE} ${TARGET_ENV} image to ${IMAGE_TAG}"
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"

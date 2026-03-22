@@ -6,3 +6,8 @@ namespace: auth-prod
 resources:
   - ../../base
   - namespace.yaml
+
+images:
+  - name: ghcr.io/donghyeonka/project-auth-server
+    newName: ghcr.io/donghyeonka/project-auth-server
+    newTag: 5648fd2
