@@ -8,3 +8,11 @@
 - `projects/<env>/infra-project.yaml`: 공용 인프라용 AppProject
 
 현재 `dev`에는 실제 선언을 두고, `prod`는 이후 운영 확장을 위한 구조와 프로젝트 골격을 먼저 유지합니다.
+
+현재 dev `infra`에는 대표적으로 아래 Application이 포함됩니다.
+
+- `vault-transit`: workload Vault transit auto-unseal provider
+- `vault`: workload Vault
+- `platform`: postgres, keycloak
+- `vault-agent-injector`: workload secret injection
+- `sealed-secrets`: image pull secret 같은 예외 secret 처리

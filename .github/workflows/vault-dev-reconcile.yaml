@@ -1,0 +1,209 @@
+name: Vault Dev Reconcile
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/vault-transit/base/**"
+      - "infra/vault-transit/overlays/dev/**"
+      - "apps/auth-server/base/**"
+      - "apps/auth-server/overlays/dev/**"
+      - "infra/platform/base/**"
+      - "infra/platform/overlays/dev/**"
+      - "argocd/applications/dev/**"
+      - "argocd/projects/dev/**"
+      - "runbooks/vault-transit/dev/**"
+      - "runbooks/vault/dev/**"
+      - "scripts/vault-transit/dev/**"
+      - "scripts/vault/dev/**"
+      - "terraform/**"
+      - ".github/workflows/vault-dev-reconcile.yaml"
+
+concurrency:
+  group: vault-dev-reconcile
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  reconcile:
+    runs-on:
+      - self-hosted
+      - linux
+    environment: dev
+    permissions:
+      contents: read
+
+    env:
+      TF_IN_AUTOMATION: "true"
+      TRANSIT_VAULT_ADDR: http://127.0.0.1:18200
+      WORKLOAD_VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_TRANSIT_DEV_ROLE_ID: ${{ secrets.VAULT_TRANSIT_DEV_ROLE_ID }}
+      VAULT_TRANSIT_DEV_SECRET_ID: ${{ secrets.VAULT_TRANSIT_DEV_SECRET_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          clean: false
+
+      - name: Validate required tools
+        run: |
+          for cmd in kubectl vault jq base64 curl terraform; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "$cmd is required on the self-hosted runner" >&2
+              exit 1
+            fi
+          done
+
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_DEV_B64 }}
+        run: |
+          if [[ -z "${KUBECONFIG_B64:-}" ]]; then
+            echo "KUBECONFIG_DEV_B64 secret is required" >&2
+            exit 1
+          fi
+
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Reconcile dev Vaults and apply Argo CD definitions
+        run: |
+          mkdir -p .terraform-state
+
+          ./scripts/vault/dev/apply-argocd-dev-infra.sh
+
+          for _ in $(seq 1 60); do
+            if kubectl -n vault-transit get deploy/vault-transit >/dev/null 2>&1; then
+              break
+            fi
+            sleep 5
+          done
+
+          if ! kubectl -n vault-transit get deploy/vault-transit >/dev/null 2>&1; then
+            echo "vault-transit deployment did not appear after applying Argo CD infra definitions" >&2
+            exit 1
+          fi
+
+          kubectl -n vault-transit rollout status deploy/vault-transit --timeout=180s
+
+          kubectl -n vault-transit port-forward svc/vault-transit 18200:8200 >/tmp/vault-transit-port-forward.log 2>&1 &
+          transit_pf_pid=$!
+          trap 'kill "$transit_pf_pid" >/dev/null 2>&1 || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS "${TRANSIT_VAULT_ADDR}/v1/sys/health" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+
+          if ! curl -fsS "${TRANSIT_VAULT_ADDR}/v1/sys/health" >/dev/null 2>&1; then
+            cat /tmp/vault-transit-port-forward.log >&2 || true
+            echo "Transit provider Vault API is not reachable through port-forward" >&2
+            exit 1
+          fi
+
+          VAULT_ADDR="${TRANSIT_VAULT_ADDR}" ./scripts/vault-transit/dev/ensure-unsealed.sh
+
+          transit_tf_token="$(
+            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+              vault write -field=token auth/approle/login \
+                role_id="$VAULT_TRANSIT_DEV_ROLE_ID" \
+                secret_id="$VAULT_TRANSIT_DEV_SECRET_ID"
+          )"
+
+          TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}" \
+          TF_VAR_vault_token="${transit_tf_token}" \
+            terraform -chdir=terraform/vault-transit/dev init -input=false
+
+          TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}" \
+          TF_VAR_vault_token="${transit_tf_token}" \
+            terraform -chdir=terraform/vault-transit/dev apply -input=false -auto-approve
+
+          for _ in $(seq 1 60); do
+            if kubectl -n vault get deploy/vault >/dev/null 2>&1; then
+              break
+            fi
+            sleep 5
+          done
+
+          if ! kubectl -n vault get deploy/vault >/dev/null 2>&1; then
+            echo "workload vault deployment did not appear after transit bootstrap" >&2
+            exit 1
+          fi
+
+          kubectl -n vault rollout status deploy/vault --timeout=180s
+
+          kubectl -n vault port-forward svc/vault 8200:8200 >/tmp/vault-workload-port-forward.log 2>&1 &
+          workload_pf_pid=$!
+          trap 'kill "$workload_pf_pid" >/dev/null 2>&1 || true; kill "$transit_pf_pid" >/dev/null 2>&1 || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS "${WORKLOAD_VAULT_ADDR}/v1/sys/health" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+
+          if ! curl -fsS "${WORKLOAD_VAULT_ADDR}/v1/sys/health" >/dev/null 2>&1; then
+            cat /tmp/vault-workload-port-forward.log >&2 || true
+            echo "Workload Vault API is not reachable through port-forward" >&2
+            exit 1
+          fi
+
+          VAULT_ADDR="${WORKLOAD_VAULT_ADDR}" ./scripts/vault/dev/ensure-unsealed.sh
+
+          workload_role_id="$(
+            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+            VAULT_TOKEN="${transit_tf_token}" \
+              vault kv get -field=VAULT_WORKLOAD_DEV_ROLE_ID kv/dev/workload/bootstrap 2>/dev/null || true
+          )"
+
+          workload_secret_id="$(
+            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+            VAULT_TOKEN="${transit_tf_token}" \
+              vault kv get -field=VAULT_WORKLOAD_DEV_SECRET_ID kv/dev/workload/bootstrap 2>/dev/null || true
+          )"
+
+          if [[ -z "${workload_role_id}" || -z "${workload_secret_id}" ]]; then
+            echo "Workload Vault workflow AppRole bootstrap values are missing from provider Vault." >&2
+            echo "Run terraform/vault/dev once with a privileged workload token to seed kv/dev/workload/bootstrap." >&2
+            exit 1
+          fi
+
+          workload_tf_token="$(
+            VAULT_ADDR="${WORKLOAD_VAULT_ADDR}" \
+              vault write -field=token auth/approle/login \
+                role_id="${workload_role_id}" \
+                secret_id="${workload_secret_id}"
+          )"
+
+          TF_VAR_workload_vault_addr="${WORKLOAD_VAULT_ADDR}" \
+          TF_VAR_workload_vault_token="${workload_tf_token}" \
+          TF_VAR_transit_vault_addr="${TRANSIT_VAULT_ADDR}" \
+          TF_VAR_transit_vault_token="${transit_tf_token}" \
+            terraform -chdir=terraform/vault/dev init -input=false
+
+          TF_VAR_workload_vault_addr="${WORKLOAD_VAULT_ADDR}" \
+          TF_VAR_workload_vault_token="${workload_tf_token}" \
+          TF_VAR_transit_vault_addr="${TRANSIT_VAULT_ADDR}" \
+          TF_VAR_transit_vault_token="${transit_tf_token}" \
+            terraform -chdir=terraform/vault/dev apply -input=false -auto-approve
+
+          for _ in $(seq 1 30); do
+            injector_deployment="$(kubectl -n vault get deployment -l app.kubernetes.io/name=vault-agent-injector -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            if [[ -n "$injector_deployment" ]]; then
+              kubectl -n vault rollout status "deployment/${injector_deployment}" --timeout=180s
+              break
+            fi
+            sleep 5
+          done
+
+          ./scripts/vault/dev/apply-argocd-dev-apps.sh

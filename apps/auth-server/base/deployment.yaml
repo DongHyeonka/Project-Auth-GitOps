@@ -36,7 +36,9 @@ spec:
             - configMapRef:
                 name: auth-server-config
             - secretRef:
-                name: auth-server-secret
+                name: postgres-auth-server-credentials
+            - secretRef:
+                name: keycloak-client-auth-server
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

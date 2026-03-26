@@ -1,0 +1,69 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-client-sync
+spec:
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-perms-keycloak-sync-env: "0644"
+        vault.hashicorp.com/agent-inject-secret-keycloak-sync-env: kv/data/dev/platform/keycloak/bootstrap-admin
+        vault.hashicorp.com/agent-inject-template-keycloak-sync-env: |
+          {{- with secret "kv/data/dev/platform/keycloak/bootstrap-admin" -}}
+          export KC_BOOTSTRAP_ADMIN_PASSWORD={{ printf "%q" .Data.data.KC_BOOTSTRAP_ADMIN_PASSWORD }}
+          {{- end }}
+          {{- with secret "kv/data/dev/platform/keycloak/client-auth-server" -}}
+          export KEYCLOAK_CLIENT_SECRET={{ printf "%q" .Data.data.KEYCLOAK_CLIENT_SECRET }}
+          {{- end }}
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+        vault.hashicorp.com/role: keycloak-client-sync-dev
+    spec:
+      automountServiceAccountToken: true
+      containers:
+        - name: keycloak-client-sync
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              . /vault/secrets/keycloak-sync-env
+              set -eu
+
+              until /opt/keycloak/bin/kcadm.sh config credentials \
+                --server http://keycloak.platform.svc.cluster.local \
+                --realm master \
+                --user "$KC_BOOTSTRAP_ADMIN_USERNAME" \
+                --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1; do
+                sleep 5
+              done
+
+              CLIENT_UUID=$(/opt/keycloak/bin/kcadm.sh get clients \
+                -r project-auth \
+                -q clientId="$KEYCLOAK_CLIENT_ID" | sed -n 's/.*"id" : "\([^"]*\)".*/\1/p' | head -n 1)
+
+              test -n "$CLIENT_UUID"
+
+              /opt/keycloak/bin/kcadm.sh update "clients/${CLIENT_UUID}" \
+                -r project-auth \
+                -s "secret=$KEYCLOAK_CLIENT_SECRET" \
+                -s "baseUrl=$AUTH_SERVER_BASE_URL" \
+                -s 'redirectUris=["'"$AUTH_SERVER_BASE_URL"'/login/oauth2/code/keycloak-google","'"$AUTH_SERVER_BASE_URL"'/login/oauth2/code/keycloak-github"]' \
+                -s 'webOrigins=["'"$AUTH_SERVER_BASE_URL"'"]'
+          env:
+            - $patch: replace
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME
+            - name: KEYCLOAK_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_CLIENT_ID
+            - name: AUTH_SERVER_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: AUTH_SERVER_BASE_URL

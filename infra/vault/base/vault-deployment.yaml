@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      serviceAccountName: vault-server
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.18
+          env:
+            - name: VAULT_ADDR
+              value: http://127.0.0.1:8200
+            - name: VAULT_TRANSIT_SEAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vault-transit-seal
+                  key: VAULT_TRANSIT_SEAL_TOKEN
+          args:
+            - server
+            - -config=/vault/config/vault.hcl
+          ports:
+            - containerPort: 8200
+              name: http
+          volumeMounts:
+            - name: vault-config
+              mountPath: /vault/config
+            - name: vault-data
+              mountPath: /vault/data
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1; code=$?; [ "$code" -eq 0 ] || [ "$code" -eq 2 ]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1; code=$?; [ "$code" -eq 0 ] || [ "$code" -eq 2 ]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: vault-config
+          configMap:
+            name: vault-config
+            defaultMode: 0555
+        - name: vault-data
+          persistentVolumeClaim:
+            claimName: vault-data

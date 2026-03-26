@@ -1,0 +1,59 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault-agent-injector-dev
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: infra-dev
+  source:
+    repoURL: https://helm.releases.hashicorp.com
+    chart: vault
+    targetRevision: 0.32.0
+    helm:
+      values: |
+        global:
+          externalVaultAddr: http://vault.vault.svc.cluster.local:8200
+          tlsDisable: true
+        server:
+          enabled: false
+        injector:
+          enabled: true
+          authPath: auth/kubernetes
+          webhook:
+            failurePolicy: Fail
+            namespaceSelector:
+              matchLabels:
+                vault-injection: enabled
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          agentImage:
+            repository: hashicorp/vault
+            tag: "1.18"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      enabled: true
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 5

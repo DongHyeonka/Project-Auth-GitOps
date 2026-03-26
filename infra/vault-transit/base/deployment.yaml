@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault-transit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault-transit
+  template:
+    metadata:
+      labels:
+        app: vault-transit
+    spec:
+      containers:
+        - name: vault-transit
+          image: hashicorp/vault:1.18
+          env:
+            - name: VAULT_ADDR
+              value: http://127.0.0.1:8200
+          args:
+            - server
+            - -config=/vault/config/vault.hcl
+          ports:
+            - containerPort: 8200
+              name: http
+          volumeMounts:
+            - name: vault-transit-config
+              mountPath: /vault/config
+            - name: vault-transit-data
+              mountPath: /vault/data
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1; code=$?; [ "$code" -eq 0 ] || [ "$code" -eq 2 ]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1; code=$?; [ "$code" -eq 0 ] || [ "$code" -eq 2 ]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: vault-transit-config
+          configMap:
+            name: vault-transit-config
+            defaultMode: 0555
+        - name: vault-transit-data
+          persistentVolumeClaim:
+            claimName: vault-transit-data

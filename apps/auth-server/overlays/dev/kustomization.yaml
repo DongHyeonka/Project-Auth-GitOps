@@ -7,8 +7,24 @@ resources:
   - ../../base
   - namespace.yaml
   - configmap.yaml
-  - auth-server-secret.sealedsecret.yaml
+  - ingress.yaml
+  - ingress-tls.sealedsecret.yaml
+  - public-access.yaml
+  - networkpolicy.yaml
   - ghcr-regcred.sealedsecret.yaml
+
+patches:
+  - path: deployment.vault-patch.yaml
+  - path: db-migration-job.vault-patch.yaml
+  - path: deployment.network-tls-patch.yaml
+
+configMapGenerator:
+  - name: public-ca-cert
+    files:
+      - ca.crt=files/public-ca.crt
+
+generatorOptions:
+  disableNameSuffixHash: true
 
 images:
   - name: ghcr.io/donghyeonka/project-auth-server

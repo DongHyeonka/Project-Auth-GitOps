@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - postgres-serviceaccount.yaml
+  - keycloak-serviceaccount.yaml
+  - keycloak-client-sync-serviceaccount.yaml
+  - postgres-service.yaml
+  - postgres-statefulset.yaml
+  - keycloak-service.yaml
+  - keycloak-deployment.yaml
+  - keycloak-client-sync-job.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: postgres-init-script
+    files:
+      - files/postgres/01-init-project-auth-databases.sh
+  - name: keycloak-realm-import
+    files:
+      - files/keycloak/project-auth-realm.json

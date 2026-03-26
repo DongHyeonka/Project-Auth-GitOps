@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-server
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: public-ca-truststore
+          image: eclipse-temurin:21-jre
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              cp "$JAVA_HOME/lib/security/cacerts" /work/cacerts
+              keytool -importcert -noprompt -trustcacerts \
+                -alias project-auth-dev-public-ca \
+                -file /ca/ca.crt \
+                -keystore /work/cacerts \
+                -storepass changeit
+          volumeMounts:
+            - name: public-ca-cert
+              mountPath: /ca
+              readOnly: true
+            - name: public-truststore
+              mountPath: /work
+      containers:
+        - name: api-server
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: -Djavax.net.ssl.trustStore=/work/cacerts -Djavax.net.ssl.trustStorePassword=changeit
+          volumeMounts:
+            - name: public-truststore
+              mountPath: /work
+              readOnly: true
+      volumes:
+        - name: public-ca-cert
+          configMap:
+            name: public-ca-cert
+        - name: public-truststore
+          emptyDir: {}

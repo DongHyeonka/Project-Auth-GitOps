@@ -3,6 +3,8 @@ kind: Application
 metadata:
   name: platform-dev
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -10,7 +12,7 @@ spec:
   source:
     repoURL: https://github.com/DongHyeonka/Project-Auth-GitOps
     targetRevision: main
-    path: apps/auth-server/overlays/dev/platform
+    path: infra/platform/overlays/dev
   destination:
     server: https://kubernetes.default.svc
     namespace: platform

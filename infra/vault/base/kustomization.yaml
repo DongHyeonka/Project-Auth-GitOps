@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - vault-serviceaccount.yaml
+  - vault-auth-delegator.clusterrolebinding.yaml
+  - vault-pvc.yaml
+  - vault-service.yaml
+  - vault-deployment.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: vault-config
+    files:
+      - files/vault/vault.hcl

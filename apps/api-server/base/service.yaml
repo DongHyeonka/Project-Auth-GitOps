@@ -7,6 +7,6 @@ spec:
     app: api-server
   ports:
     - name: http
-      port: 8082
+      port: 80
       targetPort: 8082
   type: ClusterIP

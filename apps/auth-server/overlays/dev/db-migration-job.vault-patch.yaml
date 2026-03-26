@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: auth-db-migration
+spec:
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-secret-migration-env: database/creds/auth-db-migration-dev
+        vault.hashicorp.com/agent-inject-template-migration-env: |
+          {{- with secret "database/creds/auth-db-migration-dev" -}}
+          export APP_DATASOURCE_USERNAME={{ printf "%q" .Data.username }}
+          export APP_DATASOURCE_PASSWORD={{ printf "%q" .Data.password }}
+          {{- end }}
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+        vault.hashicorp.com/agent-run-as-group: "10001"
+        vault.hashicorp.com/agent-run-as-user: "10001"
+        vault.hashicorp.com/role: auth-db-migration-dev
+    spec:
+      automountServiceAccountToken: true
+      containers:
+        - name: auth-db-migration
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              . /vault/secrets/migration-env
+              exec java -jar /app/migration.jar
+          env:
+            - $patch: replace
+            - name: SPRING_MAIN_WEB_APPLICATION_TYPE
+              value: none
+            - name: APP_PERSISTENCE_MIGRATION_RUN_ON_STARTUP
+              value: "true"
+            - name: APP_PERSISTENCE_MIGRATION_LOCATION
+              value: classpath:db/migration
+            - name: APP_DATASOURCE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: auth-server-config
+                  key: APP_DATASOURCE_URL
+            - name: APP_DATASOURCE_DRIVER_CLASS_NAME
+              value: org.postgresql.Driver

@@ -13,7 +13,7 @@ spec:
       labels:
         app: auth-db-migration
     spec:
-      serviceAccountName: auth-server
+      serviceAccountName: auth-db-migration
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
@@ -45,12 +45,12 @@ spec:
             - name: APP_DATASOURCE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: auth-server-secret
+                  name: postgres-auth-server-credentials
                   key: APP_DATASOURCE_USERNAME
             - name: APP_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: auth-server-secret
+                  name: postgres-auth-server-credentials
                   key: APP_DATASOURCE_PASSWORD
             - name: APP_DATASOURCE_DRIVER_CLASS_NAME
               value: org.postgresql.Driver

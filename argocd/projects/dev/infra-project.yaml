@@ -10,8 +10,13 @@ spec:
   sourceRepos:
     - https://github.com/DongHyeonka/Project-Auth-GitOps
     - https://bitnami-labs.github.io/sealed-secrets
+    - https://helm.releases.hashicorp.com
   destinations:
     - namespace: platform
+      server: https://kubernetes.default.svc
+    - namespace: vault
+      server: https://kubernetes.default.svc
+    - namespace: vault-transit
       server: https://kubernetes.default.svc
     - namespace: kube-system
       server: https://kubernetes.default.svc
@@ -24,6 +29,8 @@ spec:
       kind: ClusterRole
     - group: "rbac.authorization.k8s.io"
       kind: ClusterRoleBinding
+    - group: "admissionregistration.k8s.io"
+      kind: MutatingWebhookConfiguration
   namespaceResourceWhitelist:
     - group: ""
       kind: ConfigMap

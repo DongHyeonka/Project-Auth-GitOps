@@ -4,22 +4,23 @@ metadata:
   name: auth-server-config
 data:
   SPRING_PROFILES_ACTIVE: dev
+  SERVER_FORWARD_HEADERS_STRATEGY: framework
   APP_DOCS_TITLE: Project Auth Server API
   APP_DOCS_DESCRIPTION: dev auth-server OpenAPI
   APP_DOCS_VERSION: v1
   APP_DATASOURCE_URL: jdbc:postgresql://postgres.platform.svc.cluster.local:5432/project_auth
   APP_PERSISTENCE_MIGRATION_RUN_ON_STARTUP: "false"
-  APP_SECURITY_OAUTH2_KEYCLOAK_ISSUER_URI: http://keycloak.platform.svc.cluster.local:8081/realms/project-auth
+  APP_SECURITY_OAUTH2_KEYCLOAK_ISSUER_URI: https://keycloak-public.platform.svc.cluster.local/realms/project-auth
   APP_SECURITY_OAUTH2_KEYCLOAK_CLIENT_ID: project-auth-server
   APP_SECURITY_OAUTH2_GOOGLE_REGISTRATION_ID: keycloak-google
   APP_SECURITY_OAUTH2_GOOGLE_IDP_HINT: google
   APP_SECURITY_OAUTH2_GITHUB_REGISTRATION_ID: keycloak-github
   APP_SECURITY_OAUTH2_GITHUB_IDP_HINT: github
-  APP_SECURITY_JWT_ISSUER: http://auth-server.auth-dev.svc.cluster.local:8080
+  APP_SECURITY_JWT_ISSUER: https://auth-public.auth-dev.svc.cluster.local
   APP_SECURITY_JWT_ACTIVE_KEY_ID: dev-vault-rsa-1
   APP_SECURITY_JWT_GENERATE_KEY_PAIR_ON_STARTUP: "false"
   APP_SECURITY_JWT_ACCESS_TOKEN_EXPIRATION: PT30M
   APP_SECURITY_JWT_VAULT_ENABLED: "true"
-  APP_SECURITY_JWT_VAULT_ADDRESS: http://vault.platform.svc.cluster.local:8200
+  APP_SECURITY_JWT_VAULT_ADDRESS: http://vault.vault.svc.cluster.local:8200
   APP_SECURITY_JWT_VAULT_MOUNT_PATH: transit
   APP_SECURITY_JWT_VAULT_TRANSIT_KEY_NAME: project-auth-jwt

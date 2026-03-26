@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-perms-postgres-env: "0644"
+        vault.hashicorp.com/agent-inject-secret-postgres-env: kv/data/dev/platform/postgres/superuser
+        vault.hashicorp.com/agent-inject-template-postgres-env: |
+          {{- with secret "kv/data/dev/platform/postgres/superuser" -}}
+          export POSTGRES_PASSWORD={{ printf "%q" .Data.data.POSTGRES_SUPERUSER_PASSWORD }}
+          {{- end }}
+          {{- with secret "kv/data/dev/platform/postgres/auth-server" -}}
+          export AUTH_DB_PASSWORD={{ printf "%q" .Data.data.AUTH_DB_PASSWORD }}
+          {{- end }}
+          {{- with secret "kv/data/dev/platform/postgres/keycloak" -}}
+          export KEYCLOAK_DB_PASSWORD={{ printf "%q" .Data.data.KEYCLOAK_DB_PASSWORD }}
+          {{- end }}
+        vault.hashicorp.com/role: postgres-dev
+    spec:
+      automountServiceAccountToken: true
+      containers:
+        - name: postgres
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              . /vault/secrets/postgres-env
+              exec docker-entrypoint.sh postgres
+          env:
+            - $patch: replace
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_SUPERUSER
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_DEFAULT_DB
+            - name: AUTH_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: AUTH_DB_NAME
+            - name: AUTH_DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: AUTH_DB_USER
+            - name: KEYCLOAK_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_DB_NAME
+            - name: KEYCLOAK_DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_DB_USER

@@ -3,6 +3,8 @@ kind: Application
 metadata:
   name: api-server-dev
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "40"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:

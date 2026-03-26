@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
   - serviceaccount.yaml
+  - auth-db-migration-serviceaccount.yaml
   - service.yaml
   - db-migration-job.yaml
   - deployment.yaml
