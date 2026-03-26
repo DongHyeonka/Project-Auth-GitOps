@@ -4,29 +4,29 @@ kind: Kustomization
 namespace: auth-dev
 
 resources:
-  - ../../base
-  - namespace.yaml
-  - configmap.yaml
-  - ingress.yaml
-  - ingress-tls.sealedsecret.yaml
-  - public-access.yaml
-  - networkpolicy.yaml
-  - ghcr-regcred.sealedsecret.yaml
+- ../../base
+- namespace.yaml
+- configmap.yaml
+- ingress.yaml
+- ingress-tls.sealedsecret.yaml
+- public-access.yaml
+- networkpolicy.yaml
+- ghcr-regcred.sealedsecret.yaml
 
 patches:
-  - path: deployment.vault-patch.yaml
-  - path: db-migration-job.vault-patch.yaml
-  - path: deployment.network-tls-patch.yaml
+- path: deployment.vault-patch.yaml
+- path: db-migration-job.vault-patch.yaml
+- path: deployment.network-tls-patch.yaml
 
 configMapGenerator:
-  - name: public-ca-cert
-    files:
-      - ca.crt=files/public-ca.crt
+- files:
+  - ca.crt=files/public-ca.crt
+  name: public-ca-cert
 
 generatorOptions:
   disableNameSuffixHash: true
 
 images:
-  - name: ghcr.io/donghyeonka/project-auth-server
-    newName: ghcr.io/donghyeonka/project-auth-server
-    newTag: 5648fd2
+- name: ghcr.io/donghyeonka/project-auth-server
+  newName: ghcr.io/donghyeonka/project-auth-server
+  newTag: 1f47f2c
