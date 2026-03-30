@@ -120,6 +120,19 @@ jobs:
                 secret_id="$VAULT_TRANSIT_DEV_SECRET_ID"
           )"
 
+          VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+          VAULT_TOKEN="${transit_tf_token}" \
+            vault policy write \
+              vault-transit-automation-dev \
+              runbooks/vault-transit/dev/policies/vault-transit-automation-dev.hcl
+
+          transit_tf_token="$(
+            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+              vault write -field=token auth/approle/login \
+                role_id="$VAULT_TRANSIT_DEV_ROLE_ID" \
+                secret_id="$VAULT_TRANSIT_DEV_SECRET_ID"
+          )"
+
           transit_state_path="${TF_STATE_DIR}/vault-transit-dev.tfstate"
 
           TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}" \
@@ -129,53 +142,58 @@ jobs:
               -reconfigure \
               -backend-config="path=${transit_state_path}"
 
-          if [[ ! -f "${transit_state_path}" ]]; then
-            echo "Missing vault-transit Terraform state at ${transit_state_path}." >&2
-            echo "Seed the runner's persistent state before using workflow AppRole reconciliation." >&2
-            exit 1
-          fi
-
           if ! terraform -chdir=terraform/vault-transit/dev state list >/dev/null 2>&1; then
             echo "vault-transit Terraform state is unreadable. Re-seed ${transit_state_path}." >&2
             exit 1
           fi
 
-          if [[ -z "$(terraform -chdir=terraform/vault-transit/dev state list)" ]]; then
-            echo "vault-transit Terraform state is empty at ${transit_state_path}. Importing existing resources..." >&2
+          export TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}"
+          export TF_VAR_vault_token="${transit_tf_token}"
 
-            export TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}"
-            export TF_VAR_vault_token="${transit_tf_token}"
+          ensure_transit_state_resource() {
+            local address="$1"
+            local import_id="$2"
 
-            workflow_secret_accessor="$(
-              VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
-              VAULT_TOKEN="${transit_tf_token}" \
-                vault write -field=secret_id_accessor \
-                  "auth/approle/role/vault-transit-dev-workflow/secret-id/lookup" \
-                  secret_id="${VAULT_TRANSIT_DEV_SECRET_ID}"
-            )"
+            if ! terraform -chdir=terraform/vault-transit/dev state show "$address" >/dev/null 2>&1; then
+              echo "Importing missing vault-transit state for ${address}..." >&2
+              terraform -chdir=terraform/vault-transit/dev import "$address" "$import_id"
+            fi
+          }
 
-            seal_token="$(
-              kubectl -n vault get secret vault-transit-seal -o jsonpath='{.data.VAULT_TRANSIT_SEAL_TOKEN}' | base64 -d
-            )"
+          workflow_secret_accessor="$(
+            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+            VAULT_TOKEN="${transit_tf_token}" \
+              vault write -field=secret_id_accessor \
+                "auth/approle/role/vault-transit-dev-workflow/secret-id/lookup" \
+                secret_id="${VAULT_TRANSIT_DEV_SECRET_ID}"
+          )"
 
-            seal_accessor="$(
-              VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
-              VAULT_TOKEN="${seal_token}" \
-                vault token lookup -format=json | jq -r '.data.accessor'
-            )"
+          seal_token="$(
+            kubectl -n vault get secret vault-transit-seal -o jsonpath='{.data.VAULT_TRANSIT_SEAL_TOKEN}' | base64 -d
+          )"
 
-            terraform -chdir=terraform/vault-transit/dev import kubernetes_secret_v1.vault_transit_seal vault/vault-transit-seal
-            terraform -chdir=terraform/vault-transit/dev import vault_mount.kv kv
-            terraform -chdir=terraform/vault-transit/dev import vault_mount.transit transit
-            terraform -chdir=terraform/vault-transit/dev import vault_policy.workload_vault_transit_dev workload-vault-transit-dev
-            terraform -chdir=terraform/vault-transit/dev import vault_policy.vault_transit_admin_dev vault-transit-admin-dev
-            terraform -chdir=terraform/vault-transit/dev import vault_policy.vault_transit_automation_dev vault-transit-automation-dev
-            terraform -chdir=terraform/vault-transit/dev import vault_auth_backend.approle approle
-            terraform -chdir=terraform/vault-transit/dev import vault_approle_auth_backend_role.workflow auth/approle/role/vault-transit-dev-workflow
-            terraform -chdir=terraform/vault-transit/dev import "vault_approle_auth_backend_role_secret_id.workflow" "backend=approle::role=vault-transit-dev-workflow::accessor=${workflow_secret_accessor}"
-            terraform -chdir=terraform/vault-transit/dev import vault_token.seal "${seal_accessor}"
-            terraform -chdir=terraform/vault-transit/dev import vault_transit_secret_backend_key.workload_unseal transit/keys/workload-vault-dev-unseal
+          if [[ -z "${seal_token}" ]]; then
+            echo "vault-transit-seal secret exists but VAULT_TRANSIT_SEAL_TOKEN is empty." >&2
+            exit 1
           fi
+
+          seal_accessor="$(
+            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+            VAULT_TOKEN="${seal_token}" \
+              vault token lookup -format=json | jq -r '.data.accessor'
+          )"
+
+          ensure_transit_state_resource kubernetes_secret_v1.vault_transit_seal vault/vault-transit-seal
+          ensure_transit_state_resource vault_mount.kv kv
+          ensure_transit_state_resource vault_mount.transit transit
+          ensure_transit_state_resource vault_policy.workload_vault_transit_dev workload-vault-transit-dev
+          ensure_transit_state_resource vault_policy.vault_transit_admin_dev vault-transit-admin-dev
+          ensure_transit_state_resource vault_policy.vault_transit_automation_dev vault-transit-automation-dev
+          ensure_transit_state_resource vault_auth_backend.approle approle
+          ensure_transit_state_resource vault_approle_auth_backend_role.workflow auth/approle/role/vault-transit-dev-workflow
+          ensure_transit_state_resource "vault_approle_auth_backend_role_secret_id.workflow" "backend=approle::role=vault-transit-dev-workflow::accessor=${workflow_secret_accessor}"
+          ensure_transit_state_resource vault_token.seal "${seal_accessor}"
+          ensure_transit_state_resource vault_transit_secret_backend_key.workload_unseal transit/keys/workload-vault-dev-unseal
 
           TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}" \
           TF_VAR_vault_token="${transit_tf_token}" \
@@ -249,6 +267,62 @@ jobs:
               -input=false \
               -reconfigure \
               -backend-config="path=${workload_state_path}"
+
+          export TF_VAR_workload_vault_addr="${WORKLOAD_VAULT_ADDR}"
+          export TF_VAR_workload_vault_token="${workload_tf_token}"
+          export TF_VAR_transit_vault_addr="${TRANSIT_VAULT_ADDR}"
+          export TF_VAR_transit_vault_token="${transit_tf_token}"
+
+          ensure_workload_state_resource() {
+            local address="$1"
+            local import_id="$2"
+
+            if ! terraform -chdir=terraform/vault/dev state show "$address" >/dev/null 2>&1; then
+              echo "Importing missing workload-vault state for ${address}..." >&2
+              terraform -chdir=terraform/vault/dev import "$address" "$import_id"
+            fi
+          }
+
+          workload_secret_accessor="$(
+            VAULT_ADDR="${WORKLOAD_VAULT_ADDR}" \
+            VAULT_TOKEN="${workload_tf_token}" \
+              vault write -field=secret_id_accessor \
+                "auth/approle/role/workload-dev-workflow/secret-id/lookup" \
+                secret_id="${workload_secret_id}"
+          )"
+
+          ensure_workload_state_resource vault_mount.kv kv
+          ensure_workload_state_resource vault_mount.database database
+          ensure_workload_state_resource vault_mount.transit transit
+          ensure_workload_state_resource vault_auth_backend.kubernetes kubernetes
+          ensure_workload_state_resource vault_kubernetes_auth_backend_config.cluster auth/kubernetes/config
+          ensure_workload_state_resource vault_auth_backend.approle approle
+          ensure_workload_state_resource vault_policy.auth_server auth-server-dev
+          ensure_workload_state_resource vault_policy.auth_db_migration auth-db-migration-dev
+          ensure_workload_state_resource vault_policy.postgres postgres-dev
+          ensure_workload_state_resource vault_policy.keycloak keycloak-dev
+          ensure_workload_state_resource vault_policy.keycloak_client_sync keycloak-client-sync-dev
+          ensure_workload_state_resource vault_policy.postgres_operator postgres-operator-dev
+          ensure_workload_state_resource vault_policy.keycloak_operator keycloak-operator-dev
+          ensure_workload_state_resource vault_policy.platform_admin platform-admin-dev
+          ensure_workload_state_resource vault_policy.workload_automation workload-automation-dev
+          ensure_workload_state_resource vault_kubernetes_auth_backend_role.auth_server auth/kubernetes/role/auth-server-dev
+          ensure_workload_state_resource vault_kubernetes_auth_backend_role.auth_db_migration auth/kubernetes/role/auth-db-migration-dev
+          ensure_workload_state_resource vault_kubernetes_auth_backend_role.postgres auth/kubernetes/role/postgres-dev
+          ensure_workload_state_resource vault_kubernetes_auth_backend_role.keycloak auth/kubernetes/role/keycloak-dev
+          ensure_workload_state_resource vault_kubernetes_auth_backend_role.keycloak_client_sync auth/kubernetes/role/keycloak-client-sync-dev
+          ensure_workload_state_resource vault_transit_secret_backend_key.project_auth_jwt transit/keys/project-auth-jwt
+          ensure_workload_state_resource vault_approle_auth_backend_role.workflow auth/approle/role/workload-dev-workflow
+          ensure_workload_state_resource "vault_approle_auth_backend_role_secret_id.workflow" "backend=approle::role=workload-dev-workflow::accessor=${workload_secret_accessor}"
+          ensure_workload_state_resource vault_database_secret_backend_connection.platform_postgres database/config/platform-postgres-dev
+          ensure_workload_state_resource vault_database_secret_backend_role.auth_db_migration database/roles/auth-db-migration-dev
+          ensure_workload_state_resource vault_database_secret_backend_role.postgres_operator database/roles/postgres-operator-dev
+          ensure_workload_state_resource vault_kv_secret_v2.platform_postgres_superuser kv/data/dev/platform/postgres/superuser
+          ensure_workload_state_resource vault_kv_secret_v2.platform_postgres_auth_server kv/data/dev/platform/postgres/auth-server
+          ensure_workload_state_resource vault_kv_secret_v2.platform_postgres_keycloak kv/data/dev/platform/postgres/keycloak
+          ensure_workload_state_resource vault_kv_secret_v2.platform_keycloak_bootstrap_admin kv/data/dev/platform/keycloak/bootstrap-admin
+          ensure_workload_state_resource vault_kv_secret_v2.platform_keycloak_client_auth_server kv/data/dev/platform/keycloak/client-auth-server
+          ensure_workload_state_resource vault_kv_secret_v2.workload_bootstrap kv/data/dev/workload/bootstrap
 
           TF_VAR_workload_vault_addr="${WORKLOAD_VAULT_ADDR}" \
           TF_VAR_workload_vault_token="${workload_tf_token}" \

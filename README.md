@@ -1298,3 +1298,74 @@ flowchart TD
   핵심 관찰값: PostgreSQL 내부 비밀번호와 Vault KV 주입값이 달라 PVC 기반 기존 상태와 새 입력값이 충돌하고 있었음
 - 재현/확인 명령: CI 로그에서 `Plan: 11 to add`, `path is already in use`, `permission denied`
   핵심 관찰값: runner가 local backend state를 못 보고 기존 `vault-transit` 리소스를 신규 생성 대상으로 보고 있었음
+
+## Cycle 20
+
+### 1. 초기 구조
+```mermaid
+flowchart TD
+  subgraph BEFORE[Partial state drift]
+    A1[self-hosted runner workspace]
+    A2[local backend state exists but is incomplete]
+    A3[terraform sees some resources, misses others]
+    A4[workflow token tries create on missing state entries]
+  end
+
+  A1 --> A2
+  A2 --> A3
+  A3 --> A4
+```
+
+### 2. 문제점
+- CI는 더 이상 완전히 빈 state는 아니었지만, `vault-transit` state에 정책 일부만 남고 mount/auth/token 같은 핵심 리소스가 빠진 **partial state** 상태로 실행되고 있었습니다.
+- 기존 workflow는 `state list` 가 완전히 비어 있을 때만 import 하도록 되어 있어, partial state일 때는 import 분기가 전혀 돌지 않았습니다.
+- 그래서 Terraform은 빠진 리소스만 신규 생성 대상으로 보고 `kv/`, `transit/`, `approle/` 를 다시 만들려 했고, seal token 생성 단계에서는 `403 permission denied` 가 났습니다.
+- 같은 패턴은 이후 `terraform/vault/dev` 에도 다시 터질 수 있는 구조였습니다.
+
+### 3. 변경 후 구조
+```mermaid
+flowchart TD
+  subgraph AFTER[Per-resource state reconciliation]
+    B1[terraform init with explicit backend path]
+    B2[state show per managed resource]
+    B3[missing resources imported individually]
+    B4[apply runs only after state convergence]
+  end
+
+  B1 --> B2
+  B2 --> B3
+  B3 --> B4
+```
+
+### 4. 이전 구조 대비 변경점
+- `.github/workflows/vault-dev-reconcile.yaml` 의 transit 단계 import 로직을 **empty-state 전용 가드**에서 **리소스 단위 ensure/import** 방식으로 변경했습니다.
+- transit import 전에 live `vault-transit-automation-dev` policy를 현재 파일 내용으로 한 번 덮어쓰고, 새 토큰으로 다시 로그인하도록 바꿔 `auth/token/lookup-accessor` 같은 새 권한이 import 전에 즉시 반영되게 했습니다.
+- `vault-transit` 에 대해 아래 리소스를 매 실행마다 `state show` 로 확인하고, 빠진 경우만 import 하도록 바꿨습니다.
+  - `vault_mount.kv`, `vault_mount.transit`
+  - `vault_auth_backend.approle`
+  - `vault_policy.*`
+  - `vault_approle_auth_backend_role.workflow`
+  - `vault_approle_auth_backend_role_secret_id.workflow`
+  - `vault_token.seal`
+  - `vault_transit_secret_backend_key.workload_unseal`
+  - `kubernetes_secret_v1.vault_transit_seal`
+- 같은 방식으로 `terraform/vault/dev` 에도 workload Vault managed resource별 import 보강을 추가했습니다.
+- `runbooks/vault-transit/dev/policies/vault-transit-automation-dev.hcl` 에 `auth/token/lookup-accessor` 권한을 추가해 seal token accessor import가 가능하도록 보강했습니다.
+
+### 5. 해결된 내용
+- self-hosted runner가 이전 실패 실행 때문에 **부분적으로만 남은 state** 를 가지고 있어도, 다음 실행에서 빠진 리소스를 개별 import 하며 수렴할 수 있게 됐습니다.
+- CI가 “state가 조금이라도 있으니 안전하다”고 오판하고 bootstrap API를 다시 두드리는 경로를 막았습니다.
+- transit 단계뿐 아니라 workload 단계도 같은 형태의 local backend drift에 대비할 수 있게 됐습니다.
+
+### 6. 트러블슈팅 메모
+- 재현/확인 명령: CI 로그에서 `Plan: 8 to add, 1 to change`, `path is already in use at kv/`, `path is already in use at approle/`, `permission denied`
+  핵심 관찰값: 완전 빈 state라면 `Plan: 11 to add` 이어야 하는데, 일부 정책만 state에 남아 있어 **partial state** 였음
+- 재현/확인 명령: `terraform -chdir=terraform/vault-transit/dev state list`
+  핵심 관찰값: 로컬 정상 state에는 11개 managed resource가 모두 있었음
+- 판단 근거: 기존 workflow는 `state list` 가 비었을 때만 import를 수행하므로, partial state에서는 import가 건너뛰어지고 빠진 리소스를 신규 생성 대상으로 보게 된다고 판단했습니다.
+- 수정 또는 조치:
+  - workflow에 `ensure_transit_state_resource`, `ensure_workload_state_resource` 함수를 추가
+  - 필요한 import ID를 accessor/path 기준으로 계산해 빠진 리소스만 import
+  - transit import 전에 `vault policy write vault-transit-automation-dev ...` 후 재로그인
+  - transit automation policy에 `auth/token/lookup-accessor` 추가
+- 검증 명령: 다음 CI 실행에서 `Importing missing vault-transit state for ...` / `Importing missing workload-vault state for ...` 로그가 먼저 나오고, 그 뒤 `terraform apply` 가 create 대신 reconcile로 수렴하는지 확인

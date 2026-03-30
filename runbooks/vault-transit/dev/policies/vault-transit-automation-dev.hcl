@@ -46,6 +46,10 @@ path "auth/token/lookup" {
   capabilities = ["update"]
 }
 
+path "auth/token/lookup-accessor" {
+  capabilities = ["update"]
+}
+
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
