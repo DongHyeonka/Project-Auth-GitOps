@@ -12,6 +12,45 @@
 - `terraform`
 - dev 클러스터에 접근 가능한 kubeconfig
 
+### 0. 기동 상태 확인
+
+`init / unseal` 전에 먼저 `vault-transit` pod가 실제로 기동 가능한 상태인지 확인합니다.
+
+```bash
+kubectl -n vault-transit get deploy,pods,svc,pvc
+kubectl -n vault-transit rollout status deploy/vault-transit --timeout=180s
+```
+
+정상 기준:
+
+- `deployment/vault-transit` 이 `1/1 Ready`
+- pod가 `Running`
+- `CrashLoopBackOff` 가 아님
+
+기동이 안 되면 아래를 먼저 봅니다.
+
+```bash
+kubectl -n vault-transit describe deployment vault-transit
+kubectl -n vault-transit logs deploy/vault-transit --tail=200
+kubectl -n vault-transit get events --sort-by=.lastTimestamp | tail -n 30
+```
+
+최근 dev 기준 대표 원인은 아래였습니다.
+
+- `Cluster address must be set when using raft storage`
+  원인: raft storage 사용 시 `api_addr`, `cluster_addr`, listener `cluster_address` 가 빠져 있었음
+- `Could not chown /vault/config`
+  원인: ConfigMap mount가 read-only 인데 이미지 entrypoint가 해당 경로를 `chown` 하려 함
+
+현재 base manifest는 위 이슈를 피하기 위해:
+
+- `api_addr`, `cluster_addr`, `cluster_address` 추가
+- service/deployment `8201` cluster 포트 추가
+- deployment `strategy: Recreate`
+- `/vault/config/vault.hcl` 을 `/tmp/vault.hcl` 로 복사 후 `vault server` 실행
+
+형태로 정리되어 있습니다.
+
 ### 1. 포트 포워딩
 
 ```bash

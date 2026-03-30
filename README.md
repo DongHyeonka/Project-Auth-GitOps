@@ -1038,3 +1038,60 @@ flowchart TD
 - 판단 근거: 이미지 pull/PVC 문제는 아니고 Vault 프로세스가 raft listener 설정 부족 때문에 바로 종료된다고 판단했습니다.
 - 수정 또는 조치: `vault-transit` 와 `vault` base `vault.hcl`, deployment, service에 raft cluster 주소와 `8201` 포트를 추가했습니다.
 - 검증 명령: `kubectl kustomize infra/vault-transit/overlays/dev`, `kubectl kustomize infra/vault/overlays/dev`
+
+## Cycle 16
+
+### 1. 초기 구조
+```mermaid
+flowchart TD
+  subgraph BEFORE[Vault transit unstable startup]
+    A1[raft address incomplete]
+    A2[image entrypoint touching read-only config]
+    A3[RollingUpdate on single PVC]
+  end
+
+  A1 --> A2
+  A2 --> A3
+```
+
+### 2. 문제점
+- `vault-transit` application이 sync된 뒤에도 pod가 `CrashLoopBackOff` 에 빠져 bootstrap을 시작할 수 없었습니다.
+- 로그에는 `Cluster address must be set when using raft storage` 와 `Could not chown /vault/config` 가 함께 보여, 설정 누락과 기동 방식 문제가 섞여 있었습니다.
+- 단일 replica와 단일 PVC를 쓰는 `vault`/`vault-transit` 을 `RollingUpdate` 로 굴리면 old/new pod가 겹치면서 rollout 안정성이 떨어졌습니다.
+
+### 3. 변경 후 구조
+```mermaid
+flowchart TD
+  subgraph AFTER[Stable single-node Vault startup]
+    B1[raft api_addr + cluster_addr]
+    B2[listener cluster_address + 8201 port]
+    B3[copy config to /tmp before start]
+    B4[Recreate deployment strategy]
+  end
+
+  B1 --> B2
+  B2 --> B3
+  B3 --> B4
+```
+
+### 4. 이전 구조 대비 변경점
+- `infra/vault-transit/base/files/vault/vault.hcl` 과 `infra/vault/base/files/vault/vault.hcl` 에 `api_addr`, `cluster_addr`, listener `cluster_address` 를 추가했습니다.
+- 두 service/deployment에 `8201` cluster 포트를 추가했습니다.
+- `vault` 와 `vault-transit` deployment를 `strategy: Recreate` 로 바꿨습니다.
+- 두 deployment 모두 ConfigMap의 `vault.hcl` 을 `/tmp/vault.hcl` 로 복사한 뒤 `vault server -config=/tmp/vault.hcl` 로 실행하도록 바꿨습니다.
+
+### 5. 해결된 내용
+- raft storage 필수 설정 누락으로 인한 즉시 종료 원인을 코드에서 제거했습니다.
+- read-only ConfigMap mount와 이미지 entrypoint 충돌 가능성을 줄여, 기동 경로가 더 단순해졌습니다.
+- 단일 PVC 기반 Vault rollout에서 old/new pod 겹침을 최소화하는 방향으로 배포 전략을 정리했습니다.
+
+### 6. 트러블슈팅 메모
+- 재현/확인 명령: `kubectl -n vault-transit rollout status deploy/vault-transit --timeout=180s`
+  핵심 관찰값: `deployment "vault-transit" exceeded its progress deadline`
+- 재현/확인 명령: `kubectl -n vault-transit get deploy,pods -o wide`
+  핵심 관찰값: pod가 `CrashLoopBackOff`
+- 재현/확인 명령: `kubectl -n vault-transit logs deploy/vault-transit --tail=200`
+  핵심 관찰값: `Cluster address must be set when using raft storage`, `Could not chown /vault/config`
+- 판단 근거: config 값 부족만이 아니라, Vault 이미지 기본 entrypoint와 read-only ConfigMap mount 조합도 불안정 요인이라고 판단했습니다.
+- 수정 또는 조치: raft 주소/포트 보강, `Recreate` 전략 적용, `/tmp` 복사 후 실행 방식으로 deployment를 단순화했습니다.
+- 검증 명령: `kubectl kustomize infra/vault-transit/overlays/dev`, `kubectl kustomize infra/vault/overlays/dev`

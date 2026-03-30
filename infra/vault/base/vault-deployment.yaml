@@ -4,6 +4,8 @@ metadata:
   name: vault
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: vault
@@ -16,6 +18,9 @@ spec:
       containers:
         - name: vault
           image: hashicorp/vault:1.18
+          command:
+            - /bin/sh
+            - -ec
           env:
             - name: VAULT_ADDR
               value: http://127.0.0.1:8200
@@ -25,8 +30,9 @@ spec:
                   name: vault-transit-seal
                   key: VAULT_TRANSIT_SEAL_TOKEN
           args:
-            - server
-            - -config=/vault/config/vault.hcl
+            - |
+              cp /vault/config/vault.hcl /tmp/vault.hcl
+              exec vault server -config=/tmp/vault.hcl
           ports:
             - containerPort: 8200
               name: http
@@ -35,6 +41,7 @@ spec:
           volumeMounts:
             - name: vault-config
               mountPath: /vault/config
+              readOnly: true
             - name: vault-data
               mountPath: /vault/data
           readinessProbe:
