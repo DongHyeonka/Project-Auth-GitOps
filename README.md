@@ -1095,3 +1095,206 @@ flowchart TD
 - 판단 근거: config 값 부족만이 아니라, Vault 이미지 기본 entrypoint와 read-only ConfigMap mount 조합도 불안정 요인이라고 판단했습니다.
 - 수정 또는 조치: raft 주소/포트 보강, `Recreate` 전략 적용, `/tmp` 복사 후 실행 방식으로 deployment를 단순화했습니다.
 - 검증 명령: `kubectl kustomize infra/vault-transit/overlays/dev`, `kubectl kustomize infra/vault/overlays/dev`
+
+## Cycle 17
+
+### 1. 초기 구조
+```mermaid
+flowchart TD
+  subgraph BEFORE[Workload Vault auth and secret convergence]
+    A1[vault healthy but auth login 403]
+    A2[vault egress missing]
+    A3[legacy DB state vs new Vault values]
+    A4[Vault Agent template newline breakage]
+  end
+
+  A1 --> A2
+  A2 --> A3
+  A3 --> A4
+```
+
+### 2. 문제점
+- `postgres`, `auth-db-migration`, `keycloak` pod의 Vault Agent가 `auth/kubernetes/login` 에서 `403 permission denied` 를 내며 secret을 못 받았습니다.
+- `vault` namespace default-deny egress 때문에 workload Vault가 Kubernetes API와 PostgreSQL에 나가지 못했습니다.
+- Vault KV 값은 최신으로 바뀌었지만 PostgreSQL PVC는 기존 사용자 비밀번호를 유지하고 있어, 앱이 주입받은 값과 DB 내부 상태가 어긋났습니다.
+- Vault Agent template의 whitespace trim 때문에 `export` 문이 줄바꿈 없이 붙어서 잘못된 env 파일이 렌더링됐습니다.
+
+### 3. 변경 후 구조
+```mermaid
+flowchart TD
+  subgraph AFTER[Restored workload secret path]
+    B1[workload vault kubernetes auth restored]
+    B2[vault -> kubernetes api egress]
+    B3[vault -> postgres egress]
+    B4[KV values aligned with runtime state]
+    B5[template newlines preserved]
+  end
+
+  B1 --> B2
+  B1 --> B3
+  B2 --> B4
+  B3 --> B4
+  B4 --> B5
+```
+
+### 4. 이전 구조 대비 변경점
+- `terraform/vault/dev` 로 workload Vault의 `auth/kubernetes`, role, database, transit 구성을 다시 reconcile 했습니다.
+- `infra/vault/overlays/dev/networkpolicy.yaml` 에 Kubernetes API egress와 PostgreSQL egress를 추가했습니다.
+- provider/workload Vault KV와 실제 PostgreSQL 사용자 상태를 다시 맞추는 절차를 수행했습니다.
+- `apps/auth-server/overlays/dev/deployment.vault-patch.yaml`, `infra/platform/overlays/dev/keycloak.vault-patch.yaml`, `infra/platform/overlays/dev/keycloak-client-sync.vault-patch.yaml`, `infra/platform/overlays/dev/postgres.vault-patch.yaml` 에서 Vault template 줄바꿈이 유지되도록 수정했습니다.
+
+### 5. 해결된 내용
+- Workload Vault가 앱 service account JWT를 받아들여 Vault Agent 인증이 진행되기 시작했습니다.
+- `postgres` init container는 Vault Agent 인증을 통과했고, DB credential 발급 단계로 넘어갈 수 있게 됐습니다.
+- Keycloak/Auth가 읽는 injected env 파일이 shell 문법상 유효한 형태로 렌더링되기 시작했습니다.
+- 남은 앱 health 문제를 “Vault auth 실패”가 아니라 “DB credential mismatch / runtime convergence” 단계로 좁힐 수 있게 됐습니다.
+
+### 6. 트러블슈팅 메모
+- 재현/확인 명령: `kubectl -n platform logs postgres-0 -c vault-agent-init --tail=80`, `kubectl -n auth-dev logs <migration-pod> -c vault-agent-init --tail=80`
+  핵심 관찰값: `auth/kubernetes/login` 에서 `403 permission denied`
+- 재현/확인 명령: `vault auth list`, `vault read auth/kubernetes/config`, `vault read auth/kubernetes/role/<role>`
+  핵심 관찰값: `kubernetes` auth mount가 한때 사라졌고, backend/role을 다시 복구해야 했음
+- 재현/확인 명령: `curl .../tokenreviews` with reviewer token
+  핵심 관찰값: Kubernetes `TokenReview` 자체는 성공했고, 문제를 Vault backend / network 쪽으로 좁힐 수 있었음
+- 재현/확인 명령: `kubectl -n vault exec deploy/vault -- nslookup postgres.platform.svc.cluster.local`
+  핵심 관찰값: workload Vault pod에서는 headless service 대표 이름이 `NXDOMAIN` 이었고, `postgres-0.postgres.platform.svc.cluster.local` 은 해석됨
+- 판단 근거: `vault` 가 TokenReview와 DB dynamic credential 발급을 하려면 Kubernetes API / PostgreSQL egress가 모두 필요했고, 둘 중 하나라도 막히면 downstream pod가 전부 `Init` 단계에 머문다고 판단했습니다.
+- 수정 또는 조치:
+  - `infra/vault/overlays/dev/networkpolicy.yaml` 에 Kubernetes API / PostgreSQL egress 추가
+  - workload Vault auth backend 재생성 및 role 재적용
+  - provider/workload Vault KV와 PostgreSQL 실제 사용자 비밀번호 재정렬
+  - Vault template 줄바꿈 수정
+- 검증 명령:
+  - `vault read database/creds/auth-db-migration-dev`
+  - `kubectl -n platform exec postgres-0 -c postgres -- psql ...`
+  - `kubectl -n platform exec <keycloak-pod> -c vault-agent -- cat /vault/secrets/keycloak-env`
+  - `kubectl -n argocd get applications platform-dev auth-server-dev api-server-dev -o wide`
+
+## Cycle 18
+
+### 1. 초기 구조
+```mermaid
+flowchart TD
+  subgraph BEFORE[CI local state drift]
+    A1[terraform local backend]
+    A2[runner cannot see existing state]
+    A3[workflow AppRole lacks bootstrap privileges]
+  end
+
+  A1 --> A2
+  A2 --> A3
+```
+
+### 2. 문제점
+- CI의 `terraform/vault-transit/dev apply` 가 매번 `Plan: 11 to add` 로 시작하며 이미 존재하는 `kv/`, `transit/`, `approle` 을 다시 만들려 했습니다.
+- `vault-transit` workflow AppRole 토큰은 기존 리소스 reconcile 용이지, 최초 bootstrap 수준의 `sys/auth/*` / `auth/token/create` 권한까지 갖지 않아 `403 permission denied` 가 났습니다.
+- 원인은 runner가 `vault-transit-dev.tfstate` 를 못 보고 local backend state 없이 실행되고 있었기 때문이었습니다.
+
+### 3. 변경 후 구조
+```mermaid
+flowchart TD
+  subgraph AFTER[Fail-fast CI reconcile]
+    B1[persistent terraform state path]
+    B2[init -reconfigure with explicit backend path]
+    B3[empty/missing state guard]
+    B4[workflow token only reconciles existing resources]
+  end
+
+  B1 --> B2
+  B2 --> B3
+  B3 --> B4
+```
+
+### 4. 이전 구조 대비 변경점
+- `.github/workflows/vault-dev-reconcile.yaml` 에 `TF_STATE_DIR` 을 추가해 runner workspace의 `.terraform-state` 를 명시적으로 사용하도록 바꿨습니다.
+- `terraform init` 에 `-reconfigure -backend-config=path=...` 를 넣어 매 실행마다 state 경로를 명시적으로 고정했습니다.
+- `vault-transit` state 파일이 없거나 비어 있으면 bootstrap처럼 create 시도하지 않고, 명확한 에러로 중단하도록 가드를 추가했습니다.
+
+### 5. 해결된 내용
+- CI가 state 없이 기존 리소스를 다시 만들려다가 실패하는 패턴을 조기에 차단할 수 있게 됐습니다.
+- workflow AppRole 토큰이 “기존 리소스 reconcile” 용도라는 점을 workflow 자체에 반영해, bootstrap과 reconcile 경계를 분명히 했습니다.
+
+### 6. 트러블슈팅 메모
+- 재현/확인 명령: workflow 로그에서 `path is already in use at kv/`, `path is already in use at transit/`, `permission denied` 확인
+- 재현/확인 명령: `terraform -chdir=terraform/vault-transit/dev state list`
+  핵심 관찰값: 로컬에는 state가 있지만 CI 실행 컨텍스트에서는 state를 못 보는 패턴이었음
+- 판단 근거: state가 없으니 Terraform이 기존 mount/auth backend를 신규 생성 대상으로 보고, workflow AppRole 토큰은 bootstrap 권한이 없어 403이 난다고 판단했습니다.
+- 수정 또는 조치: workflow에서 state path를 고정하고, missing/empty state일 때 fail-fast 하도록 변경했습니다.
+- 검증 명령: 다음 CI 실행에서 `Missing vault-transit Terraform state ...` 또는 정상 `state list` 통과 여부 확인
+
+## Cycle 19
+
+### 1. 초기 구조
+```mermaid
+flowchart TD
+  subgraph BEFORE[Post-bootstrap runtime drift]
+    A1[vault auth backend drift]
+    A2[vault egress gaps]
+    A3[persisted postgres state]
+    A4[malformed injected env files]
+    A5[CI local state missing]
+  end
+
+  A1 --> A2
+  A2 --> A3
+  A3 --> A4
+  A5 --> A1
+```
+
+### 2. 문제점
+- workload Vault는 살아 있었지만 `auth/kubernetes/login` 이 `403 permission denied` 를 내며 `postgres`, `auth-db-migration`, `keycloak` 의 Vault Agent init이 모두 막혔습니다.
+- `vault` namespace egress가 Kubernetes API와 PostgreSQL까지 열려 있지 않아 TokenReview와 DB dynamic credential 발급이 실패했습니다.
+- PostgreSQL PVC를 유지한 상태에서 Vault KV 값만 바꾸면 DB 내부 사용자 비밀번호와 새 주입값이 어긋나 Keycloak/Auth가 계속 로그인에 실패했습니다.
+- Vault Agent template에서 aggressive trim을 써서 `export` 문이 붙어 렌더링되고, 실제 injected env 파일이 shell 문법상 깨졌습니다.
+- CI는 local backend state를 못 본 채 기존 `vault-transit` 리소스를 다시 만들려 해서 `path is already in use` / `permission denied` 로 실패했습니다.
+
+### 3. 변경 후 구조
+```mermaid
+flowchart TD
+  subgraph AFTER[Recoverable runtime convergence]
+    B1[workload vault auth recreated]
+    B2[vault -> kubernetes api egress]
+    B3[vault -> postgres egress]
+    B4[provider/workload KV re-aligned]
+    B5[postgres/keycloak runtime state re-aligned]
+    B6[template newlines preserved]
+    B7[CI imports or reuses local state]
+  end
+
+  B1 --> B2
+  B1 --> B3
+  B2 --> B4
+  B3 --> B5
+  B4 --> B5
+  B5 --> B6
+  B7 --> B1
+```
+
+### 4. 이전 구조 대비 변경점
+- `terraform/vault/dev` 로 workload Vault의 `kubernetes` auth backend와 관련 role을 다시 복구했습니다.
+- `infra/vault/overlays/dev/networkpolicy.yaml` 에 Kubernetes API egress, PostgreSQL egress를 추가했습니다.
+- provider/workload Vault KV 값을 실제 persisted DB 상태와 비교해 다시 정렬하고, 필요 시 PostgreSQL 사용자 비밀번호도 직접 맞췄습니다.
+- `apps/auth-server/overlays/dev/deployment.vault-patch.yaml`, `infra/platform/overlays/dev/keycloak.vault-patch.yaml`, `infra/platform/overlays/dev/keycloak-client-sync.vault-patch.yaml`, `infra/platform/overlays/dev/postgres.vault-patch.yaml` 의 Vault template 줄바꿈을 보존하도록 수정했습니다.
+- `.github/workflows/vault-dev-reconcile.yaml` 에 local state 경로 고정, empty state guard, import 준비 경로를 추가해 CI가 bootstrap 리소스를 새로 만들려 하지 않도록 정리했습니다.
+
+### 5. 해결된 내용
+- `postgres` Vault Agent init은 최종적으로 인증 성공까지 확인됐고, `postgres-0` 는 `2/2 Running` 으로 회복됐습니다.
+- `keycloak` 은 malformed env / DB auth 문제를 분리해서 볼 수 있게 됐고, bootstrap admin/DB credential 정합성까지 운영 관점에서 정리할 수 있게 됐습니다.
+- `auth-server` 는 DB 연결 성공과 Spring Boot 초기화 단계까지 올라와, Vault transit/JWT 쪽 남은 런타임 오류만 분리해 볼 수 있게 됐습니다.
+- CI는 최소한 state 부재를 모른 채 bootstrap을 다시 시도하는 패턴을 fail-fast 하도록 바뀌었습니다.
+
+### 6. 트러블슈팅 메모
+- 재현/확인 명령: `kubectl -n platform logs postgres-0 -c vault-agent-init --tail=80`, `kubectl -n auth-dev logs <pod> -c vault-agent-init --tail=80`
+  핵심 관찰값: `auth/kubernetes/login` 에서 `403 permission denied`
+- 재현/확인 명령: `vault auth list`, `vault read auth/kubernetes/config`, `vault read auth/kubernetes/role/<role>`
+  핵심 관찰값: `kubernetes` auth mount가 한때 없어졌고, role/config를 다시 복구해야 했음
+- 재현/확인 명령: `curl .../tokenreviews`
+  핵심 관찰값: Kubernetes `TokenReview` 는 성공하므로 SA JWT 자체보다 Vault auth/backend/network 문제로 좁혀졌음
+- 재현/확인 명령: `kubectl -n vault exec deploy/vault -- nslookup postgres.platform.svc.cluster.local`
+  핵심 관찰값: 대표 headless service 이름은 `NXDOMAIN`, `postgres-0.postgres.platform.svc.cluster.local` 은 해석 가능
+- 재현/확인 명령: `kubectl -n platform exec <keycloak-pod> -c vault-agent -- cat /vault/secrets/keycloak-env`
+  핵심 관찰값: `export KC_DB_PASSWORD=...export KC_BOOTSTRAP_ADMIN_PASSWORD=...` 처럼 줄바꿈이 깨져 있었음
+- 재현/확인 명령: `kubectl -n platform exec postgres-0 -c postgres -- psql ...`, `vault kv get ...`
+  핵심 관찰값: PostgreSQL 내부 비밀번호와 Vault KV 주입값이 달라 PVC 기반 기존 상태와 새 입력값이 충돌하고 있었음
+- 재현/확인 명령: CI 로그에서 `Plan: 11 to add`, `path is already in use`, `permission denied`
+  핵심 관찰값: runner가 local backend state를 못 보고 기존 `vault-transit` 리소스를 신규 생성 대상으로 보고 있었음

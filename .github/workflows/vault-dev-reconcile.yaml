@@ -40,6 +40,7 @@ jobs:
 
     env:
       TF_IN_AUTOMATION: "true"
+      TF_STATE_DIR: ${{ github.workspace }}/.terraform-state
       TRANSIT_VAULT_ADDR: http://127.0.0.1:18200
       WORKLOAD_VAULT_ADDR: http://127.0.0.1:8200
       VAULT_TRANSIT_DEV_ROLE_ID: ${{ secrets.VAULT_TRANSIT_DEV_ROLE_ID }}
@@ -75,7 +76,7 @@ jobs:
 
       - name: Reconcile dev Vaults and apply Argo CD definitions
         run: |
-          mkdir -p .terraform-state
+          mkdir -p "$TF_STATE_DIR"
 
           ./scripts/vault/dev/apply-argocd-dev-infra.sh
 
@@ -119,9 +120,62 @@ jobs:
                 secret_id="$VAULT_TRANSIT_DEV_SECRET_ID"
           )"
 
+          transit_state_path="${TF_STATE_DIR}/vault-transit-dev.tfstate"
+
           TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}" \
           TF_VAR_vault_token="${transit_tf_token}" \
-            terraform -chdir=terraform/vault-transit/dev init -input=false
+            terraform -chdir=terraform/vault-transit/dev init \
+              -input=false \
+              -reconfigure \
+              -backend-config="path=${transit_state_path}"
+
+          if [[ ! -f "${transit_state_path}" ]]; then
+            echo "Missing vault-transit Terraform state at ${transit_state_path}." >&2
+            echo "Seed the runner's persistent state before using workflow AppRole reconciliation." >&2
+            exit 1
+          fi
+
+          if ! terraform -chdir=terraform/vault-transit/dev state list >/dev/null 2>&1; then
+            echo "vault-transit Terraform state is unreadable. Re-seed ${transit_state_path}." >&2
+            exit 1
+          fi
+
+          if [[ -z "$(terraform -chdir=terraform/vault-transit/dev state list)" ]]; then
+            echo "vault-transit Terraform state is empty at ${transit_state_path}. Importing existing resources..." >&2
+
+            export TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}"
+            export TF_VAR_vault_token="${transit_tf_token}"
+
+            workflow_secret_accessor="$(
+              VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+              VAULT_TOKEN="${transit_tf_token}" \
+                vault write -field=secret_id_accessor \
+                  "auth/approle/role/vault-transit-dev-workflow/secret-id/lookup" \
+                  secret_id="${VAULT_TRANSIT_DEV_SECRET_ID}"
+            )"
+
+            seal_token="$(
+              kubectl -n vault get secret vault-transit-seal -o jsonpath='{.data.VAULT_TRANSIT_SEAL_TOKEN}' | base64 -d
+            )"
+
+            seal_accessor="$(
+              VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+              VAULT_TOKEN="${seal_token}" \
+                vault token lookup -format=json | jq -r '.data.accessor'
+            )"
+
+            terraform -chdir=terraform/vault-transit/dev import kubernetes_secret_v1.vault_transit_seal vault/vault-transit-seal
+            terraform -chdir=terraform/vault-transit/dev import vault_mount.kv kv
+            terraform -chdir=terraform/vault-transit/dev import vault_mount.transit transit
+            terraform -chdir=terraform/vault-transit/dev import vault_policy.workload_vault_transit_dev workload-vault-transit-dev
+            terraform -chdir=terraform/vault-transit/dev import vault_policy.vault_transit_admin_dev vault-transit-admin-dev
+            terraform -chdir=terraform/vault-transit/dev import vault_policy.vault_transit_automation_dev vault-transit-automation-dev
+            terraform -chdir=terraform/vault-transit/dev import vault_auth_backend.approle approle
+            terraform -chdir=terraform/vault-transit/dev import vault_approle_auth_backend_role.workflow auth/approle/role/vault-transit-dev-workflow
+            terraform -chdir=terraform/vault-transit/dev import "vault_approle_auth_backend_role_secret_id.workflow" "backend=approle::role=vault-transit-dev-workflow::accessor=${workflow_secret_accessor}"
+            terraform -chdir=terraform/vault-transit/dev import vault_token.seal "${seal_accessor}"
+            terraform -chdir=terraform/vault-transit/dev import vault_transit_secret_backend_key.workload_unseal transit/keys/workload-vault-dev-unseal
+          fi
 
           TF_VAR_vault_addr="${TRANSIT_VAULT_ADDR}" \
           TF_VAR_vault_token="${transit_tf_token}" \
@@ -185,11 +239,16 @@ jobs:
                 secret_id="${workload_secret_id}"
           )"
 
+          workload_state_path="${TF_STATE_DIR}/vault-dev.tfstate"
+
           TF_VAR_workload_vault_addr="${WORKLOAD_VAULT_ADDR}" \
           TF_VAR_workload_vault_token="${workload_tf_token}" \
           TF_VAR_transit_vault_addr="${TRANSIT_VAULT_ADDR}" \
           TF_VAR_transit_vault_token="${transit_tf_token}" \
-            terraform -chdir=terraform/vault/dev init -input=false
+            terraform -chdir=terraform/vault/dev init \
+              -input=false \
+              -reconfigure \
+              -backend-config="path=${workload_state_path}"
 
           TF_VAR_workload_vault_addr="${WORKLOAD_VAULT_ADDR}" \
           TF_VAR_workload_vault_token="${workload_tf_token}" \
