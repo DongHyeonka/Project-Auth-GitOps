@@ -1321,6 +1321,8 @@ flowchart TD
 - 기존 workflow는 `state list` 가 완전히 비어 있을 때만 import 하도록 되어 있어, partial state일 때는 import 분기가 전혀 돌지 않았습니다.
 - 그래서 Terraform은 빠진 리소스만 신규 생성 대상으로 보고 `kv/`, `transit/`, `approle/` 를 다시 만들려 했고, seal token 생성 단계에서는 `403 permission denied` 가 났습니다.
 - 추가로 `vault_approle_auth_backend_role_secret_id` 는 Terraform provider가 import를 지원하지 않아, partial state 복구 시 이 리소스만은 다른 managed resource처럼 state로 되살릴 수 없었습니다.
+- imported `vault_mount.kv` 는 live 상태에서 `type = "kv"` + `options.version = "2"` 로 읽히는데, 선언은 `type = "kv-v2"` 였기 때문에 partial state 복구 후에도 mount replacement가 다시 발생했습니다.
+- imported `vault_token.seal` 은 기존 accessor revoke가 필요한데, workflow 정책에 `auth/token/revoke-accessor` 권한이 빠져 있었습니다.
 - 같은 패턴은 이후 `terraform/vault/dev` 에도 다시 터질 수 있는 구조였습니다.
 
 ### 3. 변경 후 구조
@@ -1342,6 +1344,7 @@ flowchart TD
 - `.github/workflows/vault-dev-reconcile.yaml` 의 transit 단계 import 로직을 **empty-state 전용 가드**에서 **리소스 단위 ensure/import** 방식으로 변경했습니다.
 - transit import 전에 live `vault-transit-automation-dev` policy를 현재 파일 내용으로 한 번 덮어쓰고, 새 토큰으로 다시 로그인하도록 바꿔 `auth/token/lookup-accessor` 같은 새 권한이 import 전에 즉시 반영되게 했습니다.
 - import를 지원하지 않는 `vault_approle_auth_backend_role_secret_id.workflow` 는 ensure/import 대상에서 제외하고, state에 없으면 `apply` 때 새 secret ID를 발급하도록 정리했습니다.
+- `terraform/vault-transit/dev/main.tf`, `terraform/vault/dev/main.tf` 의 KV mount 선언을 `type = "kv"` + `options = { version = "2" }` 로 바꾸고, mount에는 `prevent_destroy = true` 를 추가했습니다.
 - `vault-transit` 에 대해 아래 리소스를 매 실행마다 `state show` 로 확인하고, 빠진 경우만 import 하도록 바꿨습니다.
   - `vault_mount.kv`, `vault_mount.transit`
   - `vault_auth_backend.approle`
@@ -1352,13 +1355,15 @@ flowchart TD
   - `vault_transit_secret_backend_key.workload_unseal`
   - `kubernetes_secret_v1.vault_transit_seal`
 - 같은 방식으로 `terraform/vault/dev` 에도 workload Vault managed resource별 import 보강을 추가했습니다.
-- `runbooks/vault-transit/dev/policies/vault-transit-automation-dev.hcl` 에 `auth/token/lookup-accessor` 권한을 추가해 seal token accessor import가 가능하도록 보강했습니다.
+- `runbooks/vault-transit/dev/policies/vault-transit-automation-dev.hcl` 에 `auth/token/lookup-accessor`, `auth/token/revoke-accessor` 권한을 추가해 token import/replacement cleanup이 가능하도록 보강했습니다.
 
 ### 5. 해결된 내용
 - self-hosted runner가 이전 실패 실행 때문에 **부분적으로만 남은 state** 를 가지고 있어도, 다음 실행에서 빠진 리소스를 개별 import 하며 수렴할 수 있게 됐습니다.
 - CI가 “state가 조금이라도 있으니 안전하다”고 오판하고 bootstrap API를 다시 두드리는 경로를 막았습니다.
 - transit 단계뿐 아니라 workload 단계도 같은 형태의 local backend drift에 대비할 수 있게 됐습니다.
 - AppRole secret-id 리소스는 import 대신 재생성으로 수렴시키되, 기존 secret-id는 즉시 무효화되지 않으므로 현재 CI 로그인에 쓰는 값과 공존할 수 있게 했습니다.
+- KV mount 선언과 live import 결과를 맞춰 mount replacement를 제거했고, mount에는 `prevent_destroy` 를 걸어 CI가 provider/workload KV를 다시 지우지 못하게 했습니다.
+- seal token replacement가 필요한 경우에도 accessor revoke 권한이 있어 cleanup 단계까지 마칠 수 있게 했습니다.
 
 ### 6. 트러블슈팅 메모
 - 재현/확인 명령: CI 로그에서 `Plan: 8 to add, 1 to change`, `path is already in use at kv/`, `path is already in use at approle/`, `permission denied`
@@ -1367,10 +1372,13 @@ flowchart TD
   핵심 관찰값: 로컬 정상 state에는 11개 managed resource가 모두 있었음
 - 판단 근거: 기존 workflow는 `state list` 가 비었을 때만 import를 수행하므로, partial state에서는 import가 건너뛰어지고 빠진 리소스를 신규 생성 대상으로 보게 된다고 판단했습니다.
 - 판단 근거: `vault_approle_auth_backend_role_secret_id` 는 provider가 import 미지원이므로, 그 항목까지 import 대상으로 유지하면 partial state 복구가 그 단계에서 항상 멈춘다고 판단했습니다.
+- 판단 근거: `vault_mount.kv` plan에 `type "kv" -> "kv-v2"` replacement가 보인 것은 선언 방식 mismatch 때문이고, `vault_token.seal` 삭제 실패는 `auth/token/revoke-accessor` 권한 부재 때문이라고 판단했습니다.
 - 수정 또는 조치:
   - workflow에 `ensure_transit_state_resource`, `ensure_workload_state_resource` 함수를 추가
   - 필요한 import ID를 accessor/path 기준으로 계산해 빠진 리소스만 import
   - transit import 전에 `vault policy write vault-transit-automation-dev ...` 후 재로그인
-  - transit automation policy에 `auth/token/lookup-accessor` 추가
+  - transit automation policy에 `auth/token/lookup-accessor`, `auth/token/revoke-accessor` 추가
   - import 미지원인 `vault_approle_auth_backend_role_secret_id` 는 ensure 대상에서 제외
+  - transit/workload KV mount 선언을 `kv` + `options.version=2` 로 수정
+  - transit/workload mount에 `prevent_destroy = true` 추가
 - 검증 명령: 다음 CI 실행에서 `Importing missing vault-transit state for ...` / `Importing missing workload-vault state for ...` 로그가 먼저 나오고, 그 뒤 `terraform apply` 가 create 대신 reconcile로 수렴하는지 확인

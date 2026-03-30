@@ -42,6 +42,10 @@ path "auth/token/revoke" {
   capabilities = ["update"]
 }
 
+path "auth/token/revoke-accessor" {
+  capabilities = ["update"]
+}
+
 path "auth/token/lookup" {
   capabilities = ["update"]
 }

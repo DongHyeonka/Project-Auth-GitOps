@@ -35,12 +35,23 @@ locals {
 
 resource "vault_mount" "kv" {
   path = var.kv_mount_path
-  type = "kv-v2"
+  type = "kv"
+  options = {
+    version = "2"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "vault_mount" "transit" {
   path = var.transit_mount_path
   type = "transit"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "vault_transit_secret_backend_key" "workload_unseal" {
