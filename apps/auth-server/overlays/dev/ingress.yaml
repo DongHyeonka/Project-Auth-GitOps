@@ -3,14 +3,9 @@ kind: Ingress
 metadata:
   name: auth-server
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
-    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   ingressClassName: traefik
-  tls:
-    - hosts:
-        - auth-public.auth-dev.svc.cluster.local
-      secretName: project-auth-dev-ingress-tls
   rules:
     - host: auth-public.auth-dev.svc.cluster.local
       http:

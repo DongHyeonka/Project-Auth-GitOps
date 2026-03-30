@@ -8,7 +8,6 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - keycloak-ingress.yaml
-  - ingress-tls.sealedsecret.yaml
   - public-access.yaml
   - networkpolicy.yaml
 

@@ -10,13 +10,13 @@ data:
   APP_DOCS_VERSION: v1
   APP_DATASOURCE_URL: jdbc:postgresql://postgres.platform.svc.cluster.local:5432/project_auth
   APP_PERSISTENCE_MIGRATION_RUN_ON_STARTUP: "false"
-  APP_SECURITY_OAUTH2_KEYCLOAK_ISSUER_URI: https://keycloak-public.platform.svc.cluster.local/realms/project-auth
+  APP_SECURITY_OAUTH2_KEYCLOAK_ISSUER_URI: http://keycloak-public.platform.svc.cluster.local/realms/project-auth
   APP_SECURITY_OAUTH2_KEYCLOAK_CLIENT_ID: project-auth-server
   APP_SECURITY_OAUTH2_GOOGLE_REGISTRATION_ID: keycloak-google
   APP_SECURITY_OAUTH2_GOOGLE_IDP_HINT: google
   APP_SECURITY_OAUTH2_GITHUB_REGISTRATION_ID: keycloak-github
   APP_SECURITY_OAUTH2_GITHUB_IDP_HINT: github
-  APP_SECURITY_JWT_ISSUER: https://auth-public.auth-dev.svc.cluster.local
+  APP_SECURITY_JWT_ISSUER: http://auth-public.auth-dev.svc.cluster.local
   APP_SECURITY_JWT_ACTIVE_KEY_ID: dev-vault-rsa-1
   APP_SECURITY_JWT_GENERATE_KEY_PAIR_ON_STARTUP: "false"
   APP_SECURITY_JWT_ACCESS_TOKEN_EXPIRATION: PT30M

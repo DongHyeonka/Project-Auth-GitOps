@@ -11,4 +11,4 @@ data:
   KEYCLOAK_DB_USER: keycloak
   KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME: admin
   KEYCLOAK_CLIENT_ID: project-auth-server
-  AUTH_SERVER_BASE_URL: https://auth-public.auth-dev.svc.cluster.local
+  AUTH_SERVER_BASE_URL: http://auth-public.auth-dev.svc.cluster.local

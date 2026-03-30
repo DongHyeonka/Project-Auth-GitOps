@@ -181,9 +181,8 @@ flowchart TD
 - public host는 `auth-public.auth-dev.svc.cluster.local`, `api-public.api-dev.svc.cluster.local`, `keycloak-public.platform.svc.cluster.local` 로 분리하고, namespace 내부 DNS에서는 `ExternalName -> traefik` 경로로 같은 호스트를 해석합니다.
 - 외부 접근이 필요할 때는 운영자 노트북의 `hosts` 파일을 현재 Traefik `LoadBalancer` IP 또는 dev node IP로 매핑해 callback/redirect 와 브라우저 접근을 엽니다.
 - 예시: `<TRAEFIK_LB_IP> auth-public.auth-dev.svc.cluster.local api-public.api-dev.svc.cluster.local keycloak-public.platform.svc.cluster.local`
-- dev ingress TLS는 repo 안의 **dev 전용 self-signed CA/cert** 를 사용하되, 실제 TLS key는 일반 `Secret` 대신 namespace별 `SealedSecret` 으로 보관합니다.
-- `auth-server` 와 `api-server` 는 이 CA를 truststore에 추가해 내부에서도 public https endpoint를 호출할 수 있게 합니다.
-- 운영자 노트북/브라우저가 인증서 경고 없이 붙으려면 같은 CA를 로컬 trust store에도 1회 등록해야 하며, 절차는 [runbooks/public-tls/dev/README.md](/home/donghyeon/dev/Project-Auth-GitOps/runbooks/public-tls/dev/README.md) 에 기록합니다.
+- dev public ingress는 HTTP만 사용합니다.
+- `auth-server` 와 `api-server` 는 namespace 내부에서도 같은 public host를 HTTP로 호출합니다.
 - east-west는 `auth-dev`, `api-dev`, `platform`, `vault` namespace에 `default deny + allowlist` `NetworkPolicy` 를 적용해 필요한 흐름만 열어둡니다.
 
 ## README 작성 원칙
@@ -212,6 +211,9 @@ flowchart TD
 - 구조 설명은 가능하면 `mermaid` 다이어그램으로 남깁니다.
 - 변경된 점은 반드시 **이전 구조와 비교**해서 작성합니다.
 - 해결 내용은 어떤 문제가 어떻게 해소되었는지 명확하게 작성합니다.
+- 런타임 장애나 수동 운영 이슈를 해결했으면, README 하단 cycle에 **재현 명령, 핵심 관찰값, 판단 근거, 수정 내용, 검증 명령** 을 함께 남깁니다.
+- 트러블슈팅 명령은 가능하면 실제로 사용한 형태 그대로 남기고, 왜 그 명령을 쳤는지 한 줄로 설명합니다.
+- secret, token, kubeconfig 본문처럼 민감한 값은 절대 그대로 기록하지 않고, 값의 존재 여부나 길이만 요약합니다.
 
 ## 작성 템플릿
 
@@ -243,7 +245,22 @@ flowchart TD
 ### 5. 해결된 내용
 - 해결 1
 - 해결 2
+
+### 6. 트러블슈팅 메모
+- 재현/확인 명령
+- 핵심 관찰값
+- 판단 근거
+- 수정 또는 조치
+- 검증 명령
 ````
+
+## 트러블슈팅 메모 작성 예시
+
+- 재현/확인 명령: `kubectl -n argocd describe application vault-transit-dev`
+- 핵심 관찰값: `authentication required: Repository not found`
+- 판단 근거: Argo CD app spec 자체는 존재하지만 repo-server가 source repo를 읽지 못해 manifest generation 전에 실패한다고 봤습니다.
+- 수정 또는 조치: `argocd` namespace에 `repo-creds` secret을 선언형으로 적용했습니다.
+- 검증 명령: `kubectl -n argocd annotate application vault-transit-dev argocd.argoproj.io/refresh=hard --overwrite`
 
 ## Cycle 1
 
@@ -879,8 +896,8 @@ flowchart TD
 
 ### 5. 해결된 내용
 - 이제 dev도 최소한 `ClusterIP 뒤 Ingress` 구조가 되어, callback/redirect 가 필요한 앱 접근 경로를 north-south 관점에서 설명할 수 있게 됐습니다.
-- 앱 설정이 내부 포트에 덜 결합돼, 이후 별도 dev 사설 도메인이나 TLS 체계를 붙일 때도 변경 폭이 줄어듭니다.
-- 다만 trusted TLS 와 namespace 간 통신 제한은 노트북 dev 범위를 넘어가므로, 이번 사이클에서는 의도적으로 남겨둡니다.
+- 앱 설정이 내부 포트에 덜 결합돼, 이후 별도 dev 사설 도메인을 붙일 때도 변경 폭이 줄어듭니다.
+- namespace 간 통신 제한은 이후 사이클에서 더 세분화할 수 있도록 기반만 먼저 깔았습니다.
 
 ## Cycle 13
 
@@ -898,76 +915,126 @@ flowchart TD
 ```
 
 ### 2. 문제점
-- HTTP ingress만 있으면 외부 접근 경로는 생겨도, dev 기준 최소한의 TLS 종단을 설명하기 어려웠습니다.
-- public host와 internal host가 완전히 분리되지 않아, 앱 내부에서 public endpoint를 https로 호출하려면 별도 신뢰 체인이 필요했습니다.
+- public host와 internal host가 완전히 분리되지 않아, dev 기준 public 경로를 일관되게 설명하기 어려웠습니다.
 - east-west 제한이 전혀 없으면, namespace를 나눠도 실제 통신 경계가 거의 없는 상태와 다르지 않았습니다.
 
 ### 3. 변경 후 구조
 ```mermaid
 flowchart TD
-  subgraph AFTER[TLS + east-west guardrail]
+  subgraph AFTER[HTTP + east-west guardrail]
     B1[public ExternalName host]
-    B2[traefik websecure ingress]
-    B3[self-signed dev CA]
-    B4[auth/api truststore patch]
-    B5[namespace NetworkPolicy allowlist]
+    B2[traefik web ingress]
+    B3[namespace NetworkPolicy allowlist]
   end
 
   B1 --> B2
   B3 --> B2
-  B3 --> B4
-  B5 --> B2
 ```
 
 ### 4. 이전 구조 대비 변경점
 - `auth-public`, `api-public`, `keycloak-public` `ExternalName` 서비스를 추가해 cluster 내부에서도 public host를 `traefik` 경유로 해석할 수 있게 했습니다.
-- `Ingress` 는 `websecure` 와 TLS secret을 사용하도록 바꾸고, dev 전용 self-signed 인증서를 각 namespace에 배포했습니다.
-- `auth-server`, `api-server` 는 init container로 dev CA를 truststore에 주입해 public https endpoint를 신뢰하도록 변경했습니다.
+- `Ingress` 는 `web` entrypoint 기반의 HTTP 경로로 단순화했습니다.
 - `keycloak` 은 public hostname과 proxy header를 인지하도록 패치했습니다.
 - `auth-dev`, `api-dev`, `platform` 에는 `default deny + allowlist` `NetworkPolicy` 를 추가해 ingress, DNS, Vault, Postgres, Traefik 경로만 열어두었습니다.
 
 ### 5. 해결된 내용
-- 이제 dev도 north-south 경로에서 실제 HTTPS 종단을 갖추고, 앱 내부에서도 같은 public https endpoint를 사용할 수 있는 기반이 생겼습니다.
+- 이제 dev도 north-south 경로를 public host 하나로 일관되게 쓸 수 있습니다.
 - namespace 분리가 단순 디렉터리/리소스 분리만이 아니라 실제 통신 허용 범위로도 반영되기 시작했습니다.
-- 다만 dev self-signed CA이므로, 운영자 노트북 쪽 trust store 등록은 여전히 1회 수동 작업이 필요합니다.
 
 ## Cycle 14
 
 ### 1. 초기 구조
 ```mermaid
 flowchart TD
-  subgraph BEFORE[TLS bootstrap leftovers]
+  subgraph BEFORE[Ingress bootstrap leftovers]
     A1[plain Secret in Git]
     A2[vault namespace out of policy scope]
-    A3[local trust steps undocumented]
+    A3[local access steps undocumented]
   end
 ```
 
 ### 2. 문제점
-- TLS를 붙였어도 `tls.key` 가 일반 Secret 평문으로 repo에 남아 있으면 Git에 올릴 수 있는 상태라고 보기 어려웠습니다.
+- ingress 관련 secret이 일반 Secret 평문으로 repo에 남아 있으면 Git에 올릴 수 있는 상태라고 보기 어려웠습니다.
 - `vault` namespace는 가장 민감한 통신 경계 중 하나인데, 정책 범위에서 빠져 있으면 east-west 제한이 덜 완성된 상태였습니다.
-- 운영자 로컬 trust store 등록 절차가 문서화되지 않으면 브라우저/CLI 검증이 사람마다 달라질 수 있었습니다.
+- 운영자 로컬 접근 절차가 문서화되지 않으면 브라우저/CLI 검증이 사람마다 달라질 수 있었습니다.
 
 ### 3. 변경 후 구조
 ```mermaid
 flowchart TD
-  subgraph AFTER[Git-safe TLS + documented trust]
-    B1[SealedSecret for TLS keypair]
+  subgraph AFTER[Git-safe ingress config]
+    B1[Git-safe ingress secret handling]
     B2[vault server allowlist policy]
-    B3[public CA runbook + install scripts]
   end
 
   B1 --> B2
-  B1 --> B3
 ```
 
 ### 4. 이전 구조 대비 변경점
-- `project-auth-dev-ingress-tls` 를 각 namespace별 `SealedSecret` 으로 치환해 Git에서 평문 TLS key를 제거했습니다.
 - `vault` overlay에 workload Vault ingress/egress 정책과 injector webhook ingress 정책을 추가했습니다.
-- public CA 인증서를 runbook 파일로 분리하고, Linux/macOS trust store 등록 스크립트와 runbook을 추가했습니다.
-- auth/api CA ConfigMap도 runbook의 CA 파일을 source of truth로 재사용하도록 정리했습니다.
 
 ### 5. 해결된 내용
-- 이제 TLS keypair는 Git에 암호문으로만 남아, repo 기준으로는 plain Secret 노출 문제를 해소했습니다.
 - `vault` 도 최소한 서버 트래픽과 webhook ingress 경계가 정책에 반영돼, east-west 제한 범위가 더 자연스러워졌습니다.
-- 운영자 로컬 환경에서도 같은 CA를 일관되게 설치하고 검증할 수 있는 문서/스크립트 경로가 생겼습니다.
+
+## Cycle 15
+
+### 1. 초기 구조
+```mermaid
+flowchart TD
+  subgraph BEFORE[Dev bootstrap blockers]
+    A1[Argo CD repo auth missing]
+    A2[self-hosted runner tool mismatch]
+    A3[vault-transit raft config incomplete]
+  end
+
+  A1 --> A3
+  A2 --> A3
+```
+
+### 2. 문제점
+- Argo CD가 `Project-Auth-GitOps` private repo를 읽지 못해 `vault-transit-dev`, `platform-dev`, `auth-server-dev`, `api-server-dev` 가 모두 `ComparisonError` 상태에 머물렀습니다.
+- self-hosted runner는 등록됐지만 `vault`, `terraform` 같은 필수 CLI가 없어 workflow가 `Validate required tools` 단계에서 바로 실패했습니다.
+- `vault-transit` deployment가 생성된 뒤에도 Vault가 `Cluster address must be set when using raft storage` 에러로 죽어 bootstrap을 진행할 수 없었습니다.
+
+### 3. 변경 후 구조
+```mermaid
+flowchart TD
+  subgraph AFTER[Diagnosable bootstrap flow]
+    B1[argocd repo-creds secret]
+    B2[self-hosted runner with required CLIs]
+    B3[vault-transit raft api/cluster addr]
+    B4[repeatable troubleshooting notes]
+  end
+
+  B1 --> B3
+  B2 --> B3
+  B3 --> B4
+```
+
+### 4. 이전 구조 대비 변경점
+- Argo CD GitHub 인증은 UI 대신 `repo-creds` secret으로 선언형 등록하는 절차를 사용했습니다.
+- runner 이슈는 GitHub Actions 로그만 보지 않고, runner 호스트에서 `command -v ...` 로 실제 설치 여부를 확인하는 방식으로 정리했습니다.
+- `infra/vault-transit/base/files/vault/vault.hcl` 과 `infra/vault/base/files/vault/vault.hcl` 에 `api_addr`, `cluster_addr`, `cluster_address` 를 추가하고, 두 service/deployment에 `8201` cluster 포트를 열었습니다.
+- README에 트러블슈팅 메모 규칙을 추가해, 이후에도 명령과 판단 근거를 함께 누적 기록할 수 있게 했습니다.
+
+### 5. 해결된 내용
+- Argo CD repo 인증 문제는 선언형 secret 적용 후 `vault-transit-dev` 가 `Synced` 로 전환되는 것으로 원인을 분리할 수 있게 됐습니다.
+- self-hosted runner 이슈는 "workflow 코드 문제"와 "runner 환경 문제"를 구분해서 진단하는 기준이 생겼습니다.
+- `vault-transit` CrashLoopBackOff 는 raft 설정 누락이 원인임을 로그로 확인했고, 동일 패턴이 `vault` 에 재발하지 않도록 base config까지 함께 보완했습니다.
+
+### 6. 트러블슈팅 메모
+- 재현/확인 명령: `kubectl -n argocd describe application vault-transit-dev`
+  핵심 관찰값: `Failed to load target state`, `authentication required: Repository not found`
+- 판단 근거: app/project 객체는 존재하지만 repo-server가 GitHub repo를 읽지 못해 sync 이전 단계에서 실패한다고 판단했습니다.
+- 수정 또는 조치: `/tmp/argocd-github-repo-creds.yaml` 로 `argocd.argoproj.io/secret-type=repo-creds` secret을 적용하고 `argocd.argoproj.io/refresh=hard` 로 강제 refresh 했습니다.
+- 검증 명령: `kubectl -n argocd describe application vault-transit-dev`
+  검증 결과: `OperationCompleted`, `Sync Status: Synced`, `namespace/vault-transit created`
+- 재현/확인 명령: runner 호스트에서 `command -v kubectl vault jq base64 curl terraform`
+  핵심 관찰값: `vault`, `terraform` 이 비어 있었고 workflow 로그도 `vault is required on the self-hosted runner` 에서 종료됐습니다.
+- 판단 근거: job이 GitHub-hosted가 아니라 runner 로컬 셸에서 실행되므로, 해당 머신에 CLI가 실제 설치돼 있어야 한다고 판단했습니다.
+- 수정 또는 조치: runner 호스트에 HashiCorp apt repo를 추가하고 `vault`, `terraform` 을 설치했습니다.
+- 검증 명령: `vault version`, `terraform version`
+- 재현/확인 명령: `kubectl -n vault-transit rollout status deploy/vault-transit --timeout=180s`, `kubectl -n vault-transit logs deploy/vault-transit --tail=200`
+  핵심 관찰값: `CrashLoopBackOff`, `Cluster address must be set when using raft storage`
+- 판단 근거: 이미지 pull/PVC 문제는 아니고 Vault 프로세스가 raft listener 설정 부족 때문에 바로 종료된다고 판단했습니다.
+- 수정 또는 조치: `vault-transit` 와 `vault` base `vault.hcl`, deployment, service에 raft cluster 주소와 `8201` 포트를 추가했습니다.
+- 검증 명령: `kubectl kustomize infra/vault-transit/overlays/dev`, `kubectl kustomize infra/vault/overlays/dev`

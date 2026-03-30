@@ -4,24 +4,17 @@ kind: Kustomization
 namespace: auth-dev
 
 resources:
-- ../../base
-- namespace.yaml
-- configmap.yaml
-- ingress.yaml
-- ingress-tls.sealedsecret.yaml
-- public-access.yaml
-- networkpolicy.yaml
-- ghcr-regcred.sealedsecret.yaml
+  - ../../base
+  - namespace.yaml
+  - configmap.yaml
+  - ingress.yaml
+  - public-access.yaml
+  - networkpolicy.yaml
+  - ghcr-regcred.sealedsecret.yaml
 
 patches:
-- path: deployment.vault-patch.yaml
-- path: db-migration-job.vault-patch.yaml
-- path: deployment.network-tls-patch.yaml
-
-configMapGenerator:
-- files:
-  - ca.crt=files/public-ca.crt
-  name: public-ca-cert
+  - path: deployment.vault-patch.yaml
+  - path: db-migration-job.vault-patch.yaml
 
 generatorOptions:
   disableNameSuffixHash: true

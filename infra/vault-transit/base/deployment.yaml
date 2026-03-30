@@ -24,6 +24,8 @@ spec:
           ports:
             - containerPort: 8200
               name: http
+            - containerPort: 8201
+              name: cluster
           volumeMounts:
             - name: vault-transit-config
               mountPath: /vault/config
