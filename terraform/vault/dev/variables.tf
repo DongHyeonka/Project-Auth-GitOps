@@ -46,6 +46,20 @@ variable "kubernetes_auth_path" {
   default     = "kubernetes"
 }
 
+variable "kubernetes_ca_cert" {
+  description = "CA certificate used by the workload Vault Kubernetes auth backend."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "kubernetes_token_reviewer_jwt" {
+  description = "Reviewer JWT used by the workload Vault Kubernetes auth backend."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
 variable "kubernetes_role_ttl_seconds" {
   description = "TTL, in seconds, granted to workload Kubernetes auth logins."
   type        = number
@@ -67,7 +81,7 @@ variable "postgres_admin_database" {
 variable "postgres_host" {
   description = "DNS name of the platform PostgreSQL service."
   type        = string
-  default     = "postgres.platform.svc.cluster.local"
+  default     = "postgres-0.postgres.platform.svc.cluster.local"
 }
 
 variable "postgres_operator_default_ttl_seconds" {

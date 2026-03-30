@@ -112,6 +112,11 @@ export VAULT_TOKEN="$(vault write -field=token auth/approle/login \
 
 이 스크립트는 값을 **프롬프트로 입력받기 때문에 shell history에 실제 secret이 남지 않습니다.**
 
+주의:
+
+- 이 스크립트는 `TF_VAR_transit_vault_token` 이 아니라 **`VAULT_TOKEN`** 을 사용합니다.
+- `VAULT_ADDR` 는 provider Vault 포트포워드인 `http://127.0.0.1:18200` 이어야 합니다.
+
 `populate-workload-seeds.example.sh` 는 필요한 key 구조를 보여주는 참고용 예시입니다.
 
 입력 경로는 목적 기준으로 나뉩니다.

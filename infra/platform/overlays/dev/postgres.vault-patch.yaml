@@ -10,15 +10,17 @@ spec:
         vault.hashicorp.com/agent-inject-perms-postgres-env: "0644"
         vault.hashicorp.com/agent-inject-secret-postgres-env: kv/data/dev/platform/postgres/superuser
         vault.hashicorp.com/agent-inject-template-postgres-env: |
-          {{- with secret "kv/data/dev/platform/postgres/superuser" -}}
+          {{ with secret "kv/data/dev/platform/postgres/superuser" }}
           export POSTGRES_PASSWORD={{ printf "%q" .Data.data.POSTGRES_SUPERUSER_PASSWORD }}
-          {{- end }}
-          {{- with secret "kv/data/dev/platform/postgres/auth-server" -}}
+          {{ end }}
+
+          {{ with secret "kv/data/dev/platform/postgres/auth-server" }}
           export AUTH_DB_PASSWORD={{ printf "%q" .Data.data.AUTH_DB_PASSWORD }}
-          {{- end }}
-          {{- with secret "kv/data/dev/platform/postgres/keycloak" -}}
+          {{ end }}
+
+          {{ with secret "kv/data/dev/platform/postgres/keycloak" }}
           export KEYCLOAK_DB_PASSWORD={{ printf "%q" .Data.data.KEYCLOAK_DB_PASSWORD }}
-          {{- end }}
+          {{ end }}
         vault.hashicorp.com/role: postgres-dev
     spec:
       automountServiceAccountToken: true

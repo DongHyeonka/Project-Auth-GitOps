@@ -10,12 +10,13 @@ spec:
         vault.hashicorp.com/agent-inject-perms-keycloak-sync-env: "0644"
         vault.hashicorp.com/agent-inject-secret-keycloak-sync-env: kv/data/dev/platform/keycloak/bootstrap-admin
         vault.hashicorp.com/agent-inject-template-keycloak-sync-env: |
-          {{- with secret "kv/data/dev/platform/keycloak/bootstrap-admin" -}}
+          {{ with secret "kv/data/dev/platform/keycloak/bootstrap-admin" }}
           export KC_BOOTSTRAP_ADMIN_PASSWORD={{ printf "%q" .Data.data.KC_BOOTSTRAP_ADMIN_PASSWORD }}
-          {{- end }}
-          {{- with secret "kv/data/dev/platform/keycloak/client-auth-server" -}}
+          {{ end }}
+
+          {{ with secret "kv/data/dev/platform/keycloak/client-auth-server" }}
           export KEYCLOAK_CLIENT_SECRET={{ printf "%q" .Data.data.KEYCLOAK_CLIENT_SECRET }}
-          {{- end }}
+          {{ end }}
         vault.hashicorp.com/agent-pre-populate-only: "true"
         vault.hashicorp.com/role: keycloak-client-sync-dev
     spec:

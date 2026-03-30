@@ -10,12 +10,13 @@ spec:
         vault.hashicorp.com/agent-inject-perms-keycloak-env: "0644"
         vault.hashicorp.com/agent-inject-secret-keycloak-env: kv/data/dev/platform/postgres/keycloak
         vault.hashicorp.com/agent-inject-template-keycloak-env: |
-          {{- with secret "kv/data/dev/platform/postgres/keycloak" -}}
+          {{ with secret "kv/data/dev/platform/postgres/keycloak" }}
           export KC_DB_PASSWORD={{ printf "%q" .Data.data.KEYCLOAK_DB_PASSWORD }}
-          {{- end }}
-          {{- with secret "kv/data/dev/platform/keycloak/bootstrap-admin" -}}
+          {{ end }}
+
+          {{ with secret "kv/data/dev/platform/keycloak/bootstrap-admin" }}
           export KC_BOOTSTRAP_ADMIN_PASSWORD={{ printf "%q" .Data.data.KC_BOOTSTRAP_ADMIN_PASSWORD }}
-          {{- end }}
+          {{ end }}
         vault.hashicorp.com/role: keycloak-dev
     spec:
       automountServiceAccountToken: true

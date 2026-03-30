@@ -10,13 +10,14 @@ spec:
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/agent-inject-secret-runtime-env: kv/data/dev/platform/postgres/auth-server
         vault.hashicorp.com/agent-inject-template-runtime-env: |
-          {{- with secret "kv/data/dev/platform/postgres/auth-server" -}}
+          {{ with secret "kv/data/dev/platform/postgres/auth-server" }}
           export APP_DATASOURCE_USERNAME={{ printf "%q" .Data.data.APP_DATASOURCE_USERNAME }}
           export APP_DATASOURCE_PASSWORD={{ printf "%q" .Data.data.APP_DATASOURCE_PASSWORD }}
-          {{- end }}
-          {{- with secret "kv/data/dev/platform/keycloak/client-auth-server" -}}
+          {{ end }}
+
+          {{ with secret "kv/data/dev/platform/keycloak/client-auth-server" }}
           export APP_SECURITY_OAUTH2_KEYCLOAK_CLIENT_SECRET={{ printf "%q" .Data.data.APP_SECURITY_OAUTH2_KEYCLOAK_CLIENT_SECRET }}
-          {{- end }}
+          {{ end }}
         vault.hashicorp.com/agent-inject-token: "true"
         vault.hashicorp.com/agent-run-as-group: "10001"
         vault.hashicorp.com/agent-run-as-user: "10001"

@@ -143,6 +143,16 @@ spec:
         - protocol: TCP
           port: 5432
     - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault
+          podSelector:
+            matchLabels:
+              app: vault
+      ports:
+        - protocol: TCP
+          port: 5432
+    - from:
         - podSelector:
             matchLabels:
               app: keycloak

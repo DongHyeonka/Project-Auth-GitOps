@@ -10,6 +10,10 @@ path "kv/metadata/dev/workload/*" {
   capabilities = ["read", "delete", "list"]
 }
 
+path "sys/internal/ui/mounts/*" {
+  capabilities = ["read"]
+}
+
 path "sys/mounts/*" {
   capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
