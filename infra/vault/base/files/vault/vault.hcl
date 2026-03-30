@@ -11,7 +11,6 @@ listener "tcp" {
 
 seal "transit" {
   address         = "http://vault-transit.vault-transit.svc.cluster.local:8200"
-  token           = "env://VAULT_TRANSIT_SEAL_TOKEN"
   disable_renewal = "false"
   key_name        = "workload-vault-dev-unseal"
   mount_path      = "transit/"
