@@ -160,14 +160,6 @@ jobs:
             fi
           }
 
-          workflow_secret_accessor="$(
-            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
-            VAULT_TOKEN="${transit_tf_token}" \
-              vault write -field=secret_id_accessor \
-                "auth/approle/role/vault-transit-dev-workflow/secret-id/lookup" \
-                secret_id="${VAULT_TRANSIT_DEV_SECRET_ID}"
-          )"
-
           seal_token="$(
             kubectl -n vault get secret vault-transit-seal -o jsonpath='{.data.VAULT_TRANSIT_SEAL_TOKEN}' | base64 -d
           )"
@@ -191,7 +183,6 @@ jobs:
           ensure_transit_state_resource vault_policy.vault_transit_automation_dev vault-transit-automation-dev
           ensure_transit_state_resource vault_auth_backend.approle approle
           ensure_transit_state_resource vault_approle_auth_backend_role.workflow auth/approle/role/vault-transit-dev-workflow
-          ensure_transit_state_resource "vault_approle_auth_backend_role_secret_id.workflow" "backend=approle::role=vault-transit-dev-workflow::accessor=${workflow_secret_accessor}"
           ensure_transit_state_resource vault_token.seal "${seal_accessor}"
           ensure_transit_state_resource vault_transit_secret_backend_key.workload_unseal transit/keys/workload-vault-dev-unseal
 
@@ -283,14 +274,6 @@ jobs:
             fi
           }
 
-          workload_secret_accessor="$(
-            VAULT_ADDR="${WORKLOAD_VAULT_ADDR}" \
-            VAULT_TOKEN="${workload_tf_token}" \
-              vault write -field=secret_id_accessor \
-                "auth/approle/role/workload-dev-workflow/secret-id/lookup" \
-                secret_id="${workload_secret_id}"
-          )"
-
           ensure_workload_state_resource vault_mount.kv kv
           ensure_workload_state_resource vault_mount.database database
           ensure_workload_state_resource vault_mount.transit transit
@@ -313,7 +296,6 @@ jobs:
           ensure_workload_state_resource vault_kubernetes_auth_backend_role.keycloak_client_sync auth/kubernetes/role/keycloak-client-sync-dev
           ensure_workload_state_resource vault_transit_secret_backend_key.project_auth_jwt transit/keys/project-auth-jwt
           ensure_workload_state_resource vault_approle_auth_backend_role.workflow auth/approle/role/workload-dev-workflow
-          ensure_workload_state_resource "vault_approle_auth_backend_role_secret_id.workflow" "backend=approle::role=workload-dev-workflow::accessor=${workload_secret_accessor}"
           ensure_workload_state_resource vault_database_secret_backend_connection.platform_postgres database/config/platform-postgres-dev
           ensure_workload_state_resource vault_database_secret_backend_role.auth_db_migration database/roles/auth-db-migration-dev
           ensure_workload_state_resource vault_database_secret_backend_role.postgres_operator database/roles/postgres-operator-dev
