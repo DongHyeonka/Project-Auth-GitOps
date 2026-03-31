@@ -149,12 +149,24 @@ flowchart TD
 1. 앱 repo(`Project-Auth-Server`, `Project-Api-Server`)에서 `feature -> main/develop` 병합 후 CI를 실행합니다.
 2. CI가 테스트 통과 뒤 이미지를 build/push하고 새 이미지 태그를 만듭니다.
 3. 앱 repo CI는 이미지 push 뒤 `repository_dispatch`로 이 저장소의 `.github/workflows/update-image-tag.yaml`을 호출해 dev overlay 태그를 갱신합니다.
-4. self-hosted runner의 `.github/workflows/vault-dev-reconcile.yaml` 이 transit provider bootstrap, workload Vault reconcile, dev KV populate, Argo CD dev 정의 적용을 자동 수행합니다.
-5. Argo CD가 GitOps repo와 Application 변경을 감지합니다.
-6. `vault-transit` provider가 workload Vault의 transit auto-unseal을 지원합니다.
-7. Argo CD가 cluster에 실제 배포를 반영합니다.
+4. 최초 1회 bootstrap 또는 복구가 필요할 때는 운영자가 runbook 또는 `.github/workflows/vault-dev-bootstrap.yaml` 을 사용해 privileged token으로 workload Vault bootstrap을 수행합니다.
+5. 평상시에는 self-hosted runner의 `.github/workflows/vault-dev-reconcile.yaml` 이 **bootstrap readiness 확인 후** transit/workload Vault reconcile 과 Argo CD dev 정의 적용을 자동 수행합니다.
+6. Argo CD가 GitOps repo와 Application 변경을 감지합니다.
+7. `vault-transit` provider가 workload Vault의 transit auto-unseal을 지원합니다.
+8. Argo CD가 cluster에 실제 배포를 반영합니다.
 
 즉, 앱 repo는 **CI 책임**, GitOps repo는 **CD 책임**을 갖고, 이미지 태그는 앱 repo가 자기 repo manifest를 수정하는 대신 **GitOps repo를 갱신하는 방식**으로 반영합니다.
+
+## Bootstrap vs Reconcile
+
+- `vault-dev-bootstrap`
+  - 목적: privileged token으로 workload Vault를 최초 1회 bootstrap 하거나 provider bootstrap path를 복구
+  - 실행 방식: 수동 runbook 또는 `workflow_dispatch`
+- `vault-dev-reconcile`
+  - 목적: 이미 bootstrap이 끝난 Vault를 workflow AppRole 기준으로 안전하게 reconcile
+  - 전제: `kv/dev/workload/bootstrap` 과 provider seed path가 이미 준비돼 있어야 함
+
+즉 routine CI는 bootstrap을 “대신 수행”하지 않고, bootstrap이 끝났는지 확인한 뒤 그 상태를 유지/동기화하는 역할만 맡습니다.
 
 ## 현재 Secret Lifecycle
 
@@ -1390,3 +1402,62 @@ flowchart TD
   - `vault_token.seal` 에 `ignore_changes = all` 추가
   - `kubernetes_secret_v1.vault_transit_seal` 에 `wait_for_service_account_token = true` 명시
 - 검증 명령: 다음 CI 실행에서 `Importing missing vault-transit state for ...` / `Importing missing workload-vault state for ...` 로그가 먼저 나오고, 그 뒤 `terraform apply` 가 create 대신 reconcile로 수렴하는지 확인
+
+## Cycle 21
+
+### 1. 초기 구조
+```mermaid
+flowchart TD
+  subgraph BEFORE[Mixed bootstrap + reconcile]
+    A1[vault-dev-reconcile]
+    A2[partial state import]
+    A3[provider bootstrap path missing]
+    A4[CI tries to continue with routine token]
+  end
+
+  A1 --> A2
+  A2 --> A3
+  A3 --> A4
+```
+
+### 2. 문제점
+- `vault-dev-reconcile` 가 bootstrap과 reconcile 책임을 같이 지다 보니, provider bootstrap path(`kv/dev/workload/bootstrap`) 가 없을 때도 routine workflow 안에서 해결하려는 구조였습니다.
+- 이 구조는 workflow AppRole과 local backend state 특성에 지나치게 민감했고, bootstrap 미완료/복구 상황에서 CI가 불필요하게 복잡해졌습니다.
+- 실제로 transit 단계가 통과된 뒤에도 workload bootstrap credential 부재 때문에 workflow가 중간에 실패했습니다.
+
+### 3. 변경 후 구조
+```mermaid
+flowchart TD
+  subgraph AFTER[Separated bootstrap + reconcile]
+    B1[vault-dev-bootstrap workflow or manual runbook]
+    B2[privileged workload bootstrap]
+    B3[vault-dev-reconcile]
+    B4[routine CI reconcile only]
+  end
+
+  B1 --> B2
+  B2 --> B3
+  B3 --> B4
+```
+
+### 4. 이전 구조 대비 변경점
+- `.github/workflows/vault-dev-bootstrap.yaml` 을 추가해 privileged token 기반 workload bootstrap을 수동 `workflow_dispatch` 로 분리했습니다.
+- `scripts/vault/dev/bootstrap-runbook.sh`, `scripts/vault-transit/dev/bootstrap-runbook.sh` 가 `TF_STATE_DIR` override를 받아 runner/local 어디서든 같은 state 규칙으로 bootstrap 하도록 맞췄습니다.
+- `.github/workflows/vault-dev-reconcile.yaml` 은 transit reconcile 후 provider bootstrap path 존재 여부를 먼저 확인하고, 없으면 bootstrap workflow/runbook 으로 넘기도록 정리했습니다.
+
+### 5. 해결된 내용
+- routine CI가 bootstrap까지 억지로 끌고 가다 실패하는 구조를 끊고, “privileged bootstrap” 과 “least-privilege reconcile” 을 역할별로 분리했습니다.
+- 운영자는 bootstrap이 필요할 때만 별도 workflow/runbook을 실행하고, 평상시 CI는 bootstrap readiness 확인 뒤 안전한 reconcile만 수행하게 됐습니다.
+
+### 6. 트러블슈팅 메모
+- 재현/확인 명령: CI 로그에서 `Workload Vault bootstrap AppRole is missing from provider Vault.`
+  핵심 관찰값: transit reconcile은 성공했지만 provider bootstrap path가 비어 있어 workload routine reconcile 토큰을 만들 수 없었음
+- 판단 근거: bootstrap credential 부재는 privileged bootstrap으로만 해결해야 하고, workflow AppRole 기반 reconcile 단계에서 해결하려고 하면 책임이 섞여 구조가 계속 복잡해진다고 판단했습니다.
+- 수정 또는 조치:
+  - `.github/workflows/vault-dev-bootstrap.yaml` 추가
+  - `scripts/vault/dev/bootstrap-runbook.sh`, `scripts/vault-transit/dev/bootstrap-runbook.sh` 에 `TF_STATE_DIR` 지원 추가
+  - `vault-dev-reconcile.yaml` 에 bootstrap workflow/runbook 안내 문구 추가
+- 검증 명령:
+  - `workflow_dispatch` 로 `Vault Dev Bootstrap` 실행
+  - 이후 `vault-dev-reconcile` 재실행
+  - `kubectl -n argocd get applications -o wide`

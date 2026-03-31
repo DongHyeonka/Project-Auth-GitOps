@@ -22,6 +22,9 @@
   - token, password, kubeconfig 본문, secret payload 금지
   - 대신 존재 여부, 길이, secret name, 리소스 상태만 기록
 - repo 밖 임시 파일(`/tmp/...`)로 작업한 secret manifest는 Git에 넣지 않습니다.
+- Vault 관련 자동화는 **bootstrap** 과 **reconcile** 을 분리합니다.
+  - bootstrap: privileged token 필요, 수동 runbook 또는 `Vault Dev Bootstrap` workflow
+  - reconcile: workflow AppRole 기반 routine CI
 
 ## Troubleshooting Format
 

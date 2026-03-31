@@ -22,5 +22,14 @@ export TF_VAR_transit_vault_token="$(provider_vault_token)"
 
 mkdir -p "${REPO_ROOT}/.terraform-state"
 
-terraform -chdir="${REPO_ROOT}/terraform/vault/dev" init -input=false
+if [[ -n "${TF_STATE_DIR:-}" ]]; then
+  mkdir -p "${TF_STATE_DIR}"
+  terraform -chdir="${REPO_ROOT}/terraform/vault/dev" init \
+    -input=false \
+    -reconfigure \
+    -backend-config="path=${TF_STATE_DIR}/vault-dev.tfstate"
+else
+  terraform -chdir="${REPO_ROOT}/terraform/vault/dev" init -input=false
+fi
+
 terraform -chdir="${REPO_ROOT}/terraform/vault/dev" apply -input=false -auto-approve

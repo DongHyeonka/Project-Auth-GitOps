@@ -42,5 +42,14 @@ fi
 
 mkdir -p "${REPO_ROOT}/.terraform-state"
 
-terraform -chdir="${REPO_ROOT}/terraform/vault-transit/dev" init -input=false
+if [[ -n "${TF_STATE_DIR:-}" ]]; then
+  mkdir -p "${TF_STATE_DIR}"
+  terraform -chdir="${REPO_ROOT}/terraform/vault-transit/dev" init \
+    -input=false \
+    -reconfigure \
+    -backend-config="path=${TF_STATE_DIR}/vault-transit-dev.tfstate"
+else
+  terraform -chdir="${REPO_ROOT}/terraform/vault-transit/dev" init -input=false
+fi
+
 terraform -chdir="${REPO_ROOT}/terraform/vault-transit/dev" apply -input=false -auto-approve

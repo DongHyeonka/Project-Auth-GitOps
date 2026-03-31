@@ -2,6 +2,14 @@
 
 이 문서는 dev 환경의 **workload Vault** 를 Terraform으로 선언적으로 bootstrap / reconcile 하는 절차를 정리합니다.
 
+이제 책임은 두 단계로 분리합니다.
+
+- bootstrap
+  - privileged workload token 필요
+  - 수동 runbook 또는 `Vault Dev Bootstrap` workflow 사용
+- reconcile
+  - bootstrap 완료 후 `vault-dev-reconcile` workflow 가 routine apply 수행
+
 사전 조건:
 
 - [vault-transit bootstrap runbook](/home/donghyeon/dev/Project-Auth-GitOps/runbooks/vault-transit/dev/README.md) 을 먼저 완료해야 합니다.
@@ -109,6 +117,12 @@ terraform -chdir=terraform/vault/dev output -raw workflow_secret_id
 4. `terraform/vault/dev` 를 root token 으로 1회 apply 합니다.
 5. 이 apply 가 workload workflow AppRole credential 을 `kv/dev/workload/bootstrap` 에 써넣습니다.
 6. 이후부터는 workflow 가 provider bootstrap 확인, workload Terraform apply, Argo CD app apply 를 자동 수행합니다.
+
+`Vault Dev Bootstrap` workflow 를 GitHub Actions 에서 수동 실행할 경우에는 아래 bootstrap secret 이 추가로 필요합니다.
+
+- `VAULT_WORKLOAD_DEV_BOOTSTRAP_TOKEN`
+
+이 값은 privileged workload token 이므로 bootstrap/복구 시에만 잠깐 등록하고, 작업이 끝나면 제거하는 것을 권장합니다.
 
 ### 정적 seed 로 최초 1회 넣어야 하는 값
 

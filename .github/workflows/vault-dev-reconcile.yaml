@@ -190,6 +190,24 @@ jobs:
           TF_VAR_vault_token="${transit_tf_token}" \
             terraform -chdir=terraform/vault-transit/dev apply -input=false -auto-approve
 
+          workload_role_id="$(
+            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+            VAULT_TOKEN="${transit_tf_token}" \
+              vault kv get -field=VAULT_WORKLOAD_DEV_ROLE_ID kv/dev/workload/bootstrap 2>/dev/null || true
+          )"
+
+          workload_secret_id="$(
+            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
+            VAULT_TOKEN="${transit_tf_token}" \
+              vault kv get -field=VAULT_WORKLOAD_DEV_SECRET_ID kv/dev/workload/bootstrap 2>/dev/null || true
+          )"
+
+          if [[ -z "${workload_role_id}" || -z "${workload_secret_id}" ]]; then
+            echo "Workload Vault bootstrap AppRole is missing from provider Vault." >&2
+            echo "Run workflow_dispatch 'Vault Dev Bootstrap' or execute scripts/vault/dev/bootstrap-runbook.sh with VAULT_WORKLOAD_DEV_BOOTSTRAP_TOKEN." >&2
+            exit 1
+          fi
+
           for _ in $(seq 1 60); do
             if kubectl -n vault get deploy/vault >/dev/null 2>&1; then
               break
@@ -222,24 +240,6 @@ jobs:
           fi
 
           VAULT_ADDR="${WORKLOAD_VAULT_ADDR}" ./scripts/vault/dev/ensure-unsealed.sh
-
-          workload_role_id="$(
-            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
-            VAULT_TOKEN="${transit_tf_token}" \
-              vault kv get -field=VAULT_WORKLOAD_DEV_ROLE_ID kv/dev/workload/bootstrap 2>/dev/null || true
-          )"
-
-          workload_secret_id="$(
-            VAULT_ADDR="${TRANSIT_VAULT_ADDR}" \
-            VAULT_TOKEN="${transit_tf_token}" \
-              vault kv get -field=VAULT_WORKLOAD_DEV_SECRET_ID kv/dev/workload/bootstrap 2>/dev/null || true
-          )"
-
-          if [[ -z "${workload_role_id}" || -z "${workload_secret_id}" ]]; then
-            echo "Workload Vault workflow AppRole bootstrap values are missing from provider Vault." >&2
-            echo "Run terraform/vault/dev once with a privileged workload token to seed kv/dev/workload/bootstrap." >&2
-            exit 1
-          fi
 
           workload_tf_token="$(
             VAULT_ADDR="${WORKLOAD_VAULT_ADDR}" \
