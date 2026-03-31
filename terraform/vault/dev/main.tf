@@ -84,6 +84,7 @@ resource "vault_mount" "kv" {
 
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [type, options]
   }
 }
 

@@ -42,6 +42,7 @@ resource "vault_mount" "kv" {
 
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [type, options]
   }
 }
 
@@ -101,9 +102,15 @@ resource "vault_token" "seal" {
   period       = var.seal_token_period
   policies     = [vault_policy.workload_vault_transit_dev.name]
   renewable    = true
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 resource "kubernetes_secret_v1" "vault_transit_seal" {
+  wait_for_service_account_token = true
+
   metadata {
     name      = var.target_secret_name
     namespace = var.target_namespace
