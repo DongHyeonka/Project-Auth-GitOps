@@ -4,17 +4,17 @@ kind: Kustomization
 namespace: auth-dev
 
 resources:
-  - ../../base
-  - namespace.yaml
-  - configmap.yaml
-  - ingress.yaml
-  - public-access.yaml
-  - networkpolicy.yaml
-  - ghcr-regcred.sealedsecret.yaml
+- ../../base
+- namespace.yaml
+- configmap.yaml
+- ingress.yaml
+- public-access.yaml
+- networkpolicy.yaml
+- ghcr-regcred.sealedsecret.yaml
 
 patches:
-  - path: deployment.vault-patch.yaml
-  - path: db-migration-job.vault-patch.yaml
+- path: deployment.vault-patch.yaml
+- path: db-migration-job.vault-patch.yaml
 
 generatorOptions:
   disableNameSuffixHash: true
@@ -22,4 +22,4 @@ generatorOptions:
 images:
 - name: ghcr.io/donghyeonka/project-auth-server
   newName: ghcr.io/donghyeonka/project-auth-server
-  newTag: 1f47f2c
+  newTag: 518047f
