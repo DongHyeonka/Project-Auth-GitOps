@@ -22,4 +22,4 @@ generatorOptions:
 images:
 - name: ghcr.io/donghyeonka/project-auth-server
   newName: ghcr.io/donghyeonka/project-auth-server
-  newTag: 64b4e78
+  newTag: 7f92c47
